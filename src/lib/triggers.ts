@@ -1,16 +1,50 @@
 // pollWatchlistOnce — durable workflow that fans out per-ticker fetches,
-// dedupes by uuid, runs the Pre-check Agent on each story, updates the
-// central state, and returns a verdict-grouped summary.
+// dedupes against KV via HTTP (workflow runtime can't import redis directly),
+// runs the Pre-check Agent on each story, writes verdicts back to KV via
+// HTTP, and returns a verdict-grouped summary.
 //
-// In Step 5, "deep" verdicts will additionally trigger analyzeNewsImpact()
-// (Bright Data fetch + DCSC sectors + Sonnet 4.6 deep analyst).
+// State R/W is done via fetch() to /api/state/upsert and /api/state/has-uuid
+// because the WDK workflow runtime is Edge-like (no Node Buffer global) and
+// can't load the `redis` package. Those API routes run in Node runtime where
+// redis works fine.
 
 import { getStoriesForTicker } from "./cityfalcon";
 import { judgeStory } from "./judge";
-import { state } from "./state";
 import { toSlim } from "./types";
-import type { JudgeResult, PollResult, SlimStory, Story } from "./types";
+import type { JudgeResult, PollResult, SlimStory, Status, Story } from "./types";
 import { WATCHLIST } from "./watchlist";
+
+function baseUrl(): string {
+  // Vercel injects VERCEL_URL (host only, no protocol). Fallback to localhost
+  // for dev. NEXT_PUBLIC_BASE_URL can override if needed.
+  const explicit = process.env.NEXT_PUBLIC_BASE_URL;
+  if (explicit) return explicit.replace(/\/$/, "");
+  const v = process.env.VERCEL_URL;
+  if (v) return `https://${v}`;
+  return "http://localhost:3000";
+}
+
+async function bulkHasUuid(uuids: string[]): Promise<boolean[]> {
+  if (uuids.length === 0) return [];
+  const r = await fetch(`${baseUrl()}/api/state/has-uuid`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ uuids }),
+  });
+  const j = (await r.json()) as { ok: boolean; flags?: boolean[] };
+  return j.flags ?? uuids.map(() => false);
+}
+
+async function upsertState(
+  uuid: string,
+  patch: { story?: SlimStory; status?: Status; verdict?: JudgeResult },
+): Promise<void> {
+  await fetch(`${baseUrl()}/api/state/upsert`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ uuid, ...patch }),
+  });
+}
 
 export type PollOptions = {
   tickers?: readonly string[];
@@ -59,7 +93,7 @@ export async function pollWatchlistOnce(opts: PollOptions = {}): Promise<PollRes
     tickers.map((t) => getStoriesForTicker(t, { timeFilter })),
   );
 
-  // Step 2: flatten + dedupe by uuid (within this run + KV-shared across runs).
+  // Step 2: flatten + dedupe by uuid (within this run).
   const seenInRun = new Set<string>();
   const candidates: Story[] = [];
   const failedTickers: string[] = [];
@@ -76,25 +110,23 @@ export async function pollWatchlistOnce(opts: PollOptions = {}): Promise<PollRes
     }
   }
 
-  // KV-side dedup: drop stories already in our state (any prior poll, any
-  // serverless instance). Parallel hexists checks.
-  const knownFlags = await Promise.all(candidates.map((s) => state.hasUuid(s.uuid)));
+  // Step 3: KV-side dedup (drop stories already known across runs/instances).
+  const knownFlags = await bulkHasUuid(candidates.map((s) => s.uuid));
   const fresh: Story[] = candidates.filter((_s, i) => !knownFlags[i]);
 
-  // Step 3: register fresh stories as "new" in KV up front (so dashboard
+  // Step 4: register fresh stories as "new" in KV up front (so dashboard
   // can show them flowing in even before judging completes).
-  await Promise.all(fresh.map((s) => state.upsert(s.uuid, { story: toSlim(s), status: "new" })));
+  await Promise.all(fresh.map((s) => upsertState(s.uuid, { story: toSlim(s), status: "new" })));
 
-  // Step 4: judge fan-out (concurrency-capped). Each judge call is "use step".
+  // Step 5: judge fan-out (concurrency-capped). Each judge call is "use step".
   const judged = await judgeWithLimit(fresh, concurrency);
 
-  // Step 5: state update per verdict + count (sequential to keep KV writes
-  // sane; each is fast).
+  // Step 6: state update per verdict + count.
   const counts = { skip: 0, watch: 0, deep: 0 };
   const deepStories: Array<{ story: SlimStory; judge: JudgeResult }> = [];
   for (const j of judged) {
     counts[j.judge.verdict]++;
-    await state.upsert(j.story.uuid, {
+    await upsertState(j.story.uuid, {
       story: toSlim(j.story),
       status: j.judge.verdict === "skip" ? "skipped" : "judged",
       verdict: j.judge,
