@@ -1,0 +1,153 @@
+// Types for AlphaRead — derived from verified live CityFalcon responses
+// (2026-05-02 against https://api.cityfalcon.com/v0.2/stories) plus the
+// agent + state schemas. See docs/cityfalcon_news_api_guide.md.
+
+export type StorySource = {
+  name: string;
+  countryName?: string;
+};
+
+export type Story = {
+  uuid: string;
+  title: string;
+  description: string;
+  url: string;
+  lang: string;
+  source: StorySource;
+  /** -100 (very negative) to +100 (very positive). Magnitude matters more than sign for "is this important". */
+  sentiment: number;
+  /** 0-100 — CityFalcon's quality/relevance score. */
+  cityfalconScore: number;
+  /** ISO 8601 UTC. */
+  publishTime: string;
+  paywall: boolean;
+  registrationRequired: boolean;
+  /** Number of other sources covering the same story — proxy for "the world cares". */
+  duplicatesCount: number;
+  /** Tags identifying the financial entities mentioned (tickers / asset identifiers). */
+  assetTags: string[];
+  searchTags?: string[];
+  category?: string;
+  imageUrls?: string[];
+  cityfalcon_permalink?: string;
+  additionalData?: Record<string, unknown>;
+};
+
+export type StoriesResponse = {
+  stories: Story[];
+};
+
+// DCSC sector classification — for adjacent-company spillover analysis.
+export type SectorClassification = {
+  name: string;
+  slug: string;
+  level: number;
+  /** 1-100 */
+  relevance?: number;
+  /** 0-100 */
+  confidence?: number;
+};
+
+export type PortfolioClassificationResponse = {
+  classification?: SectorClassification[];
+};
+
+export type AdjacentCompany = {
+  name: string;
+  ticker?: string;
+  allocation?: number;
+  relevance?: number;
+  confidence?: number;
+};
+
+export type SmartPortfolioResponse = {
+  portfolio?: AdjacentCompany[];
+};
+
+// ----------------------- Agent outputs ----------------------------
+
+/** Pre-check verdict: how seriously to take this story. */
+export type Verdict = "skip" | "watch" | "deep";
+
+export type JudgeResult = {
+  verdict: Verdict;
+  /** 1-2 sentence rationale shown in UI. */
+  reason: string;
+  /** 0-100. */
+  confidence: number;
+  /** Optional hints to the deep analyst about *why* this might matter long-term. */
+  longTermAngles?: string[];
+};
+
+// ----------------------- Central state ----------------------------
+
+/** Slim story projection — what the UI actually needs. Full Story is too heavy. */
+export type SlimStory = {
+  uuid: string;
+  title: string;
+  description: string;
+  url: string;
+  source: string;
+  sentiment: number;
+  cityfalconScore: number;
+  duplicatesCount: number;
+  publishTime: string;
+  assetTags: string[];
+};
+
+export function toSlim(s: Story): SlimStory {
+  return {
+    uuid: s.uuid,
+    title: s.title,
+    description: s.description,
+    url: s.url,
+    source: s.source.name,
+    sentiment: s.sentiment,
+    cityfalconScore: s.cityfalconScore,
+    duplicatesCount: s.duplicatesCount,
+    publishTime: s.publishTime,
+    assetTags: s.assetTags,
+  };
+}
+
+export type Status = "new" | "judged" | "analyzing" | "analyzed" | "merged" | "skipped";
+
+export type StoryState = {
+  story: SlimStory;
+  status: Status;
+  verdict?: JudgeResult;
+  /** Will be populated in Step 5 once the Deep Analyst runs. */
+  // analysis?: AnalysisResult;
+  firstSeen: string;
+  lastUpdated: string;
+};
+
+/** A single event entry on the activity feed. */
+export type ActivityEvent = {
+  id: string;            // unique per event (uuid:status timestamp)
+  uuid: string;          // story uuid
+  ticker?: string;       // primary ticker if known
+  status: Status;
+  verdict?: Verdict;
+  reason?: string;
+  at: string;            // ISO timestamp
+};
+
+// ----------------------- API responses ----------------------------
+
+export type PollResult = {
+  checkedTickers: number;
+  totalStories: number;
+  /** Tickers whose CityFalcon fetch failed (e.g. coverage gaps). Logged but not fatal. */
+  failedTickers: string[];
+  verdicts: {
+    skip: number;
+    watch: number;
+    deep: number;
+  };
+  /** Slimmed deep verdicts so the route can return them directly. */
+  deepStories: Array<{
+    story: SlimStory;
+    judge: JudgeResult;
+  }>;
+};
