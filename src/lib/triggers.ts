@@ -8,10 +8,11 @@
 // can't load the `redis` package. Those API routes run in Node runtime where
 // redis works fine.
 
+import { analyzeNewsImpact } from "./analyst";
 import { getStoriesForTicker } from "./cityfalcon";
 import { judgeStory } from "./judge";
 import { toSlim } from "./types";
-import type { JudgeResult, PollResult, SlimStory, Status, Story } from "./types";
+import type { AnalysisResult, JudgeResult, PollResult, SlimStory, Status, Story } from "./types";
 import { WATCHLIST } from "./watchlist";
 
 function baseUrl(): string {
@@ -44,7 +45,7 @@ async function bulkHasUuid(uuids: string[]): Promise<boolean[]> {
 
 async function upsertState(
   uuid: string,
-  patch: { story?: SlimStory; status?: Status; verdict?: JudgeResult },
+  patch: { story?: SlimStory; status?: Status; verdict?: JudgeResult; analysis?: AnalysisResult },
 ): Promise<void> {
   "use step";
   await fetch(`${baseUrl()}/api/state/upsert`, {
@@ -54,6 +55,20 @@ async function upsertState(
   });
 }
 
+/** For each deep verdict: run the Deep Analyst, then write the analysis to state. */
+async function analyzeAndRecord(story: Story): Promise<void> {
+  "use step";
+  try {
+    await upsertState(story.uuid, { status: "analyzing" });
+    const analysis = await analyzeNewsImpact(story);
+    await upsertState(story.uuid, { status: "analyzed", analysis });
+  } catch (e) {
+    // Don't crash the workflow on a single analysis failure.
+    console.error("[analyzeAndRecord] error", e);
+    await upsertState(story.uuid, { status: "judged" });
+  }
+}
+
 export type PollOptions = {
   tickers?: readonly string[];
   /** "h1" / "d1" / "w1" / "m1" — defaults to "d1" (last 24h). */
@@ -61,6 +76,31 @@ export type PollOptions = {
   /** Concurrency cap for the per-story judge fan-out. */
   judgeConcurrency?: number;
 };
+
+/** Generic concurrency-limited fan-out (no return value collected). */
+async function runWithLimit<T>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<unknown>,
+): Promise<void> {
+  let i = 0;
+  async function worker(): Promise<void> {
+    while (true) {
+      const idx = i++;
+      if (idx >= items.length) return;
+      try {
+        await fn(items[idx]);
+      } catch {
+        // swallow — caller should log inside fn if it cares
+      }
+    }
+  }
+  const workers = Array.from(
+    { length: Math.min(concurrency, items.length) },
+    () => worker(),
+  );
+  await Promise.all(workers);
+}
 
 async function judgeWithLimit(
   stories: Story[],
@@ -132,6 +172,7 @@ export async function pollWatchlistOnce(opts: PollOptions = {}): Promise<PollRes
   // Step 6: state update per verdict + count.
   const counts = { skip: 0, watch: 0, deep: 0 };
   const deepStories: Array<{ story: SlimStory; judge: JudgeResult }> = [];
+  const deepRaw: Story[] = [];
   for (const j of judged) {
     counts[j.judge.verdict]++;
     await upsertState(j.story.uuid, {
@@ -141,8 +182,15 @@ export async function pollWatchlistOnce(opts: PollOptions = {}): Promise<PollRes
     });
     if (j.judge.verdict === "deep") {
       deepStories.push({ story: toSlim(j.story), judge: j.judge });
+      deepRaw.push(j.story);
     }
   }
+
+  // Step 7: Deep Analyst — for each "deep" verdict, run the Sonnet 4.6
+  // structured analysis with enrichment (similar stories, sectors, adjacent
+  // companies). Capped concurrency keeps Gateway happy.
+  const analysisConcurrency = 3;
+  await runWithLimit(deepRaw, analysisConcurrency, analyzeAndRecord);
 
   return {
     checkedTickers: tickers.length,

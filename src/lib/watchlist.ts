@@ -28,6 +28,43 @@ export const WATCHLIST = [
   "LLY-US",    // Eli Lilly — GLP-1, biotech mega-stories
   // Consumer
   "WMT-US",    // Walmart — retail bellwether, supply chain
+
+  // ---------------- Expansion (Sat eve, +30 for higher news velocity) ----------------
+  // More tech / software
+  "ORCL-US",   // Oracle — enterprise SaaS, cloud
+  "CRM-US",    // Salesforce — SaaS bellwether
+  "ADBE-US",   // Adobe — creative + AI
+  "AMD-US",    // AMD — chip cycle alt to NVDA
+  "INTC-US",   // Intel — turnaround story
+  "CSCO-US",   // Cisco — enterprise networking
+  "AVGO-US",   // Broadcom — AI infra adjacent
+  "IBM-US",    // IBM — enterprise + Watson
+  // More financials
+  "BAC-US",    // Bank of America — consumer bank
+  "WFC-US",    // Wells Fargo — regional/national bank
+  "MS-US",     // Morgan Stanley — IB + wealth
+  "V-US",      // Visa — payments rails
+  "MA-US",     // Mastercard — payments rails
+  "AXP-US",    // American Express — premium spend
+  "BLK-US",    // BlackRock — asset manager, ETF flows
+  // More healthcare / pharma
+  "PFE-US",    // Pfizer — vaccines, pipeline
+  "JNJ-US",    // Johnson & Johnson — diversified pharma
+  "ABBV-US",   // AbbVie — Humira / pipeline
+  "MRK-US",    // Merck — Keytruda
+  "TMO-US",    // Thermo Fisher — life sciences tools
+  // More consumer
+  "KO-US",     // Coca-Cola — staples, defensive
+  "PEP-US",    // PepsiCo — staples + snacks
+  "MCD-US",    // McDonald's — global consumer
+  "NKE-US",    // Nike — China + brand cycles
+  "COST-US",   // Costco — membership economics
+  "PG-US",     // Procter & Gamble — consumer staples king
+  // Industrials
+  "BA-US",     // Boeing — aerospace + safety newsflow
+  "CAT-US",    // Caterpillar — global construction cycle
+  "UNP-US",    // Union Pacific — rails / freight bellwether
+  "F-US",      // Ford — legacy auto + EV transition
 ] as const;
 
 export type Ticker = (typeof WATCHLIST)[number];

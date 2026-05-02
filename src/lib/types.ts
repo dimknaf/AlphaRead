@@ -112,12 +112,39 @@ export function toSlim(s: Story): SlimStory {
 
 export type Status = "new" | "judged" | "analyzing" | "analyzed" | "merged" | "skipped";
 
+// Structured output from the Deep Analyst (Claude Sonnet 4.6).
+export type AnalysisResult = {
+  oneLineSummary: string;
+  magnitude: "small" | "material" | "major";
+  longTermHorizon: "days" | "weeks" | "months" | "quarters" | "years";
+  primaryCompany: {
+    ticker: string;
+    direction: "bullish" | "bearish" | "neutral";
+    rationale: string;
+    sizingContext: string;
+  };
+  spillover: Array<{
+    sector: string;
+    direction: "bullish" | "bearish" | "neutral";
+    rationale: string;
+    candidateTickers: string[];
+  }>;
+  signalVsNoise: {
+    marketIsMissing: string[];
+    marketIsOverreacting: string[];
+  };
+  watchFlags: Array<{
+    flag: string;
+    horizon: "hours" | "days" | "weeks" | "months";
+  }>;
+};
+
 export type StoryState = {
   story: SlimStory;
   status: Status;
   verdict?: JudgeResult;
-  /** Will be populated in Step 5 once the Deep Analyst runs. */
-  // analysis?: AnalysisResult;
+  /** Populated when the Deep Analyst step completes. */
+  analysis?: AnalysisResult;
   firstSeen: string;
   lastUpdated: string;
 };

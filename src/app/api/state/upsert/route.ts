@@ -5,7 +5,7 @@
 
 import { NextResponse } from "next/server";
 import { state } from "@/lib/state";
-import type { JudgeResult, SlimStory, Status } from "@/lib/types";
+import type { AnalysisResult, JudgeResult, SlimStory, Status } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -15,6 +15,7 @@ type UpsertBody = {
   story?: SlimStory;
   status?: Status;
   verdict?: JudgeResult;
+  analysis?: AnalysisResult;
 };
 
 export async function POST(req: Request) {
@@ -27,6 +28,7 @@ export async function POST(req: Request) {
       story: body.story,
       status: body.status,
       verdict: body.verdict,
+      analysis: body.analysis,
     });
     return NextResponse.json({ ok: true });
   } catch (e) {
