@@ -24,7 +24,11 @@ function baseUrl(): string {
   return "http://localhost:3000";
 }
 
+// "use step" wrappers: fetch from inside workflow context is forbidden, but
+// step functions run in regular Node runtime where global fetch is available.
+
 async function bulkHasUuid(uuids: string[]): Promise<boolean[]> {
+  "use step";
   if (uuids.length === 0) return [];
   const r = await fetch(`${baseUrl()}/api/state/has-uuid`, {
     method: "POST",
@@ -39,6 +43,7 @@ async function upsertState(
   uuid: string,
   patch: { story?: SlimStory; status?: Status; verdict?: JudgeResult },
 ): Promise<void> {
+  "use step";
   await fetch(`${baseUrl()}/api/state/upsert`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
