@@ -58,13 +58,21 @@ async function upsertState(
 /** For each deep verdict: run the Deep Analyst, then write the analysis to state. */
 async function analyzeAndRecord(story: Story): Promise<void> {
   "use step";
+  const t0 = Date.now();
+  console.log("[analyze] start", { uuid: story.uuid, ticker: story.assetTags[0] });
   try {
     await upsertState(story.uuid, { status: "analyzing" });
     const analysis = await analyzeNewsImpact(story);
     await upsertState(story.uuid, { status: "analyzed", analysis });
+    console.log("[analyze] done", {
+      uuid: story.uuid,
+      ms: Date.now() - t0,
+      magnitude: analysis.magnitude,
+    });
   } catch (e) {
     // Don't crash the workflow on a single analysis failure.
-    console.error("[analyzeAndRecord] error", e);
+    const error = e instanceof Error ? e.message : String(e);
+    console.error("[analyze] error", { uuid: story.uuid, ms: Date.now() - t0, error });
     await upsertState(story.uuid, { status: "judged" });
   }
 }
@@ -77,57 +85,47 @@ export type PollOptions = {
   judgeConcurrency?: number;
 };
 
-/** Generic concurrency-limited fan-out (no return value collected). */
-async function runWithLimit<T>(
+/**
+ * Sequential chunks, parallel within chunk. Deterministic step order — safe
+ * inside a `"use workflow"` function. The previous worker-pool pattern with a
+ * shared mutable index counter (`let i = 0; i++`) violated WDK's deterministic
+ * replay requirements and crashed every poll with
+ * "uncommitted operation(s)... corrupted event log". chunk.map() preserves
+ * input order, so the event log sees N step starts and N completions in the
+ * exact same order on every replay.
+ */
+async function chunkedAll<T, R>(
   items: T[],
-  concurrency: number,
-  fn: (item: T) => Promise<unknown>,
-): Promise<void> {
-  let i = 0;
-  async function worker(): Promise<void> {
-    while (true) {
-      const idx = i++;
-      if (idx >= items.length) return;
-      try {
-        await fn(items[idx]);
-      } catch {
-        // swallow — caller should log inside fn if it cares
-      }
-    }
+  chunkSize: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const out: R[] = [];
+  for (let i = 0; i < items.length; i += chunkSize) {
+    const chunk = items.slice(i, i + chunkSize);
+    const results = await Promise.all(chunk.map(fn));
+    out.push(...results);
   }
-  const workers = Array.from(
-    { length: Math.min(concurrency, items.length) },
-    () => worker(),
-  );
-  await Promise.all(workers);
+  return out;
 }
 
-async function judgeWithLimit(
-  stories: Story[],
-  concurrency: number,
-): Promise<Array<{ story: Story; judge: JudgeResult; error?: string }>> {
-  const results: Array<{ story: Story; judge: JudgeResult; error?: string }> = [];
-  let i = 0;
-  async function worker(): Promise<void> {
-    while (true) {
-      const idx = i++;
-      if (idx >= stories.length) return;
-      const story = stories[idx];
-      try {
-        const judge = await judgeStory(story);
-        results[idx] = { story, judge };
-      } catch (e) {
-        results[idx] = {
-          story,
-          judge: { verdict: "skip", reason: "judge error", confidence: 0 },
-          error: e instanceof Error ? e.message : String(e),
-        };
-      }
-    }
+/** Wrap judgeStory with a fallback so one Gateway hiccup doesn't fail the chunk. */
+async function judgeOrFallback(story: Story): Promise<{
+  story: Story;
+  judge: JudgeResult;
+  error?: string;
+}> {
+  try {
+    const judge = await judgeStory(story);
+    return { story, judge };
+  } catch (e) {
+    const error = e instanceof Error ? e.message : String(e);
+    console.error("[judge] error", { uuid: story.uuid, error });
+    return {
+      story,
+      judge: { verdict: "skip", reason: "judge error", confidence: 0 },
+      error,
+    };
   }
-  const workers = Array.from({ length: Math.min(concurrency, stories.length) }, () => worker());
-  await Promise.all(workers);
-  return results;
 }
 
 export async function pollWatchlistOnce(opts: PollOptions = {}): Promise<PollResult> {
@@ -166,11 +164,13 @@ export async function pollWatchlistOnce(opts: PollOptions = {}): Promise<PollRes
   // can show them flowing in even before judging completes).
   await Promise.all(fresh.map((s) => upsertState(s.uuid, { story: toSlim(s), status: "new" })));
 
-  // Step 5: judge fan-out (concurrency-capped). Each judge call is "use step".
-  const judged = await judgeWithLimit(fresh, concurrency);
+  // Step 5: judge fan-out (concurrency-capped via chunkedAll). Each judge
+  // call is "use step". Chunked Promise.all keeps step ordering deterministic
+  // for WDK's event log; a worker-pool with a shared counter does NOT.
+  const judged = await chunkedAll(fresh, concurrency, judgeOrFallback);
 
   // Step 6: state update per verdict + count.
-  const counts = { skip: 0, watch: 0, deep: 0 };
+  const counts: Record<"skip" | "watch" | "deep", number> = { skip: 0, watch: 0, deep: 0 };
   const deepStories: Array<{ story: SlimStory; judge: JudgeResult }> = [];
   const deepRaw: Story[] = [];
   for (const j of judged) {
@@ -186,11 +186,11 @@ export async function pollWatchlistOnce(opts: PollOptions = {}): Promise<PollRes
     }
   }
 
-  // Step 7: Deep Analyst — for each "deep" verdict, run the Sonnet 4.6
-  // structured analysis with enrichment (similar stories, sectors, adjacent
-  // companies). Capped concurrency keeps Gateway happy.
+  // Step 7: Deep Analyst fan-out — chunked Promise.all (concurrency 3).
+  // Each story's analyzeAndRecord is "use step"; chunk.map keeps the
+  // deterministic ordering WDK requires.
   const analysisConcurrency = 3;
-  await runWithLimit(deepRaw, analysisConcurrency, analyzeAndRecord);
+  await chunkedAll(deepRaw, analysisConcurrency, analyzeAndRecord);
 
   return {
     checkedTickers: tickers.length,
