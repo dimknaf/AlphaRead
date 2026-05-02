@@ -15,10 +15,13 @@ import type { JudgeResult, PollResult, SlimStory, Status, Story } from "./types"
 import { WATCHLIST } from "./watchlist";
 
 function baseUrl(): string {
-  // Vercel injects VERCEL_URL (host only, no protocol). Fallback to localhost
-  // for dev. NEXT_PUBLIC_BASE_URL can override if needed.
+  // Use the canonical production domain (alpharead.vercel.app) when on Vercel.
+  // The per-deploy URL (VERCEL_URL) has Deployment Protection that returns an
+  // HTML login page on auth-walled requests, breaking fetch -> JSON.parse.
   const explicit = process.env.NEXT_PUBLIC_BASE_URL;
   if (explicit) return explicit.replace(/\/$/, "");
+  const prodUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL;
+  if (prodUrl) return `https://${prodUrl}`;
   const v = process.env.VERCEL_URL;
   if (v) return `https://${v}`;
   return "http://localhost:3000";
