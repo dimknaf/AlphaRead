@@ -41,3 +41,7 @@ yarn-error.log*
 next-env.d.ts
 
 .vercel
+
+# Claude Code session-local files (skills are tracked, transient state isn't)
+.claude/scheduled_tasks.lock
+.claude/settings.local.json
