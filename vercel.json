@@ -8,7 +8,7 @@
   ],
   "functions": {
     "src/app/api/manual-trigger/route.ts": {
-      "maxDuration": 60
+      "maxDuration": 800
     }
   }
 }
