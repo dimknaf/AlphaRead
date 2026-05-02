@@ -35,11 +35,28 @@ export async function GET(req: Request) {
     }
 
     // default: all sections — read in parallel
-    const [activityFeed, topStories, sectorWatch, companiesUnderWatch] = await Promise.all([
+    const [
+      activityFeed,
+      topStories,
+      sectorWatch,
+      companiesUnderWatch,
+      magnitudeMix,
+      directionMix,
+      horizonMix,
+      hotTickers,
+      marketIsMissingDigest,
+      watchFlagDigest,
+    ] = await Promise.all([
       state.sectionActivityFeed(activityLimit),
       state.sectionTopStories(topLimit),
       state.sectionSectorWatch(),
       state.sectionCompaniesUnderWatch(WATCHLIST),
+      state.sectionMagnitudeMix(),
+      state.sectionDirectionMix(),
+      state.sectionHorizonMix(),
+      state.sectionHotTickers(10),
+      state.sectionMarketIsMissingDigest(12),
+      state.sectionWatchFlagDigest(18),
     ]);
 
     return NextResponse.json({
@@ -48,6 +65,12 @@ export async function GET(req: Request) {
       topStories,
       sectorWatch,
       companiesUnderWatch,
+      magnitudeMix,
+      directionMix,
+      horizonMix,
+      hotTickers,
+      marketIsMissingDigest,
+      watchFlagDigest,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

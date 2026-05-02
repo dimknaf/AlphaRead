@@ -59,12 +59,25 @@ type CompanyRow = {
   lastVerdict?: "skip" | "watch" | "deep";
 };
 
+type MagnitudeMix = { small: number; material: number; major: number };
+type DirectionMix = { bullish: number; bearish: number; neutral: number };
+type HorizonMix = Record<Horizon, number>;
+type HotTicker = { ticker: string; weight: number; appearances: number };
+type MissingDigestItem = { insight: string; ticker: string; uuid: string; at: string };
+type WatchFlagDigestItem = { flag: string; horizon: "hours" | "days" | "weeks" | "months"; ticker: string; uuid: string; at: string };
+
 type StateResp = {
   summary: Summary;
   activityFeed: ActivityEvent[];
   topStories: TopStory[];
   sectorWatch: SectorCount[];
   companiesUnderWatch: CompanyRow[];
+  magnitudeMix: MagnitudeMix;
+  directionMix: DirectionMix;
+  horizonMix: HorizonMix;
+  hotTickers: HotTicker[];
+  marketIsMissingDigest: MissingDigestItem[];
+  watchFlagDigest: WatchFlagDigestItem[];
 };
 
 const REFRESH_MS = 5_000;
@@ -154,6 +167,33 @@ export default function Page() {
       ) : (
         <>
           <SummaryRow s={data?.summary} />
+
+          {/* NEW — Insights tile row (4 cards) */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <Section title="Impact magnitude" hint="Across analyzed stories.">
+              <MagnitudeMixTile data={data?.magnitudeMix} />
+            </Section>
+            <Section title="Direction split" hint="Primary-company calls.">
+              <DirectionMixTile data={data?.directionMix} />
+            </Section>
+            <Section title="Horizon mix" hint="Long-term effect plays out…">
+              <HorizonMixTile data={data?.horizonMix} />
+            </Section>
+            <Section title="Hot tickers" hint="Weighted by magnitude. Includes spillover.">
+              <HotTickersTile data={data?.hotTickers ?? []} />
+            </Section>
+          </div>
+
+          {/* NEW — Two-col digest */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+            <Section title="What the market is missing" hint="Insights the consensus is overlooking.">
+              <MarketMissingDigest items={data?.marketIsMissingDigest ?? []} />
+            </Section>
+            <Section title="Watch flags" hint="Forward-looking signals from the analyst, by horizon.">
+              <WatchFlagDigest items={data?.watchFlagDigest ?? []} />
+            </Section>
+          </div>
+
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             <Section title="Activity feed" hint="Newest first. Color-coded by verdict.">
               <ActivityFeed events={data?.activityFeed ?? []} />
@@ -352,4 +392,191 @@ function CompaniesUnderWatch({ rows }: { rows: CompanyRow[] }) {
       ))}
     </ul>
   );
+}
+
+// ---------------- Insight tiles ----------------
+
+function MagnitudeMixTile({ data }: { data?: MagnitudeMix }) {
+  if (!data) return <Empty />;
+  const total = data.small + data.material + data.major;
+  if (total === 0) return <p className="text-xs text-zinc-500">No analyses yet.</p>;
+  const seg = (n: number, cls: string, label: string) => {
+    const pct = (n / total) * 100;
+    if (pct < 1) return null;
+    return (
+      <div
+        key={label}
+        className={`${cls} flex items-center justify-center text-[10px] font-semibold text-zinc-950`}
+        style={{ width: `${pct}%` }}
+        title={`${label}: ${n}`}
+      >
+        {pct >= 12 ? n : ""}
+      </div>
+    );
+  };
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex h-5 rounded overflow-hidden border border-zinc-800">
+        {seg(data.small, "bg-zinc-600", "small")}
+        {seg(data.material, "bg-yellow-500", "material")}
+        {seg(data.major, "bg-rose-500", "major")}
+      </div>
+      <div className="flex justify-between text-[10px] text-zinc-500">
+        <span>small {data.small}</span>
+        <span className="text-yellow-400">material {data.material}</span>
+        <span className="text-rose-400">major {data.major}</span>
+      </div>
+    </div>
+  );
+}
+
+function DirectionMixTile({ data }: { data?: DirectionMix }) {
+  if (!data) return <Empty />;
+  const total = data.bullish + data.bearish + data.neutral;
+  if (total === 0) return <p className="text-xs text-zinc-500">No analyses yet.</p>;
+  return (
+    <div className="grid grid-cols-3 gap-2">
+      <Pill label="bullish" value={data.bullish} cls="bg-emerald-950/60 border-emerald-900 text-emerald-300" />
+      <Pill label="bearish" value={data.bearish} cls="bg-rose-950/60 border-rose-900 text-rose-300" />
+      <Pill label="neutral" value={data.neutral} cls="bg-zinc-800 border-zinc-700 text-zinc-400" />
+    </div>
+  );
+}
+
+function Pill({ label, value, cls }: { label: string; value: number; cls: string }) {
+  return (
+    <div className={`rounded border px-2 py-2 flex flex-col items-center ${cls}`}>
+      <span className="text-lg font-bold leading-none">{value}</span>
+      <span className="text-[10px] uppercase tracking-wide mt-1">{label}</span>
+    </div>
+  );
+}
+
+function HorizonMixTile({ data }: { data?: HorizonMix }) {
+  if (!data) return <Empty />;
+  const order: Horizon[] = ["days", "weeks", "months", "quarters", "years"];
+  const max = Math.max(1, ...order.map((k) => data[k]));
+  const total = order.reduce((acc, k) => acc + data[k], 0);
+  if (total === 0) return <p className="text-xs text-zinc-500">No analyses yet.</p>;
+  const colors = ["bg-zinc-600", "bg-zinc-500", "bg-emerald-700", "bg-emerald-500", "bg-emerald-300"];
+  return (
+    <div className="flex items-end gap-1 h-20">
+      {order.map((k, i) => (
+        <div key={k} className="flex-1 flex flex-col items-center gap-1">
+          <span className="text-[10px] text-zinc-400">{data[k]}</span>
+          <div
+            className={`${colors[i]} w-full rounded-sm`}
+            style={{ height: `${(data[k] / max) * 100}%`, minHeight: data[k] ? "4px" : "0" }}
+          />
+          <span className="text-[9px] text-zinc-500 uppercase">{k.slice(0, 1)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function HotTickersTile({ data }: { data: HotTicker[] }) {
+  if (data.length === 0) return <p className="text-xs text-zinc-500">No analyses yet.</p>;
+  const max = Math.max(...data.map((d) => d.weight));
+  return (
+    <ul className="space-y-1">
+      {data.slice(0, 8).map((d, i) => (
+        <li key={d.ticker} className="flex items-center gap-2 text-xs">
+          <span className={`shrink-0 w-12 font-semibold ${i === 0 ? "text-emerald-400" : "text-zinc-300"}`}>
+            {d.ticker}
+          </span>
+          <div className="flex-1 h-1.5 bg-zinc-800 rounded overflow-hidden">
+            <div
+              className={i === 0 ? "h-full bg-emerald-400" : "h-full bg-zinc-500"}
+              style={{ width: `${(d.weight / max) * 100}%` }}
+            />
+          </div>
+          <span className="shrink-0 text-zinc-500 text-[10px] tabular-nums w-10 text-right">
+            ×{d.appearances}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function MarketMissingDigest({ items }: { items: MissingDigestItem[] }) {
+  if (items.length === 0) {
+    return <p className="text-xs text-zinc-500">No insights yet — waiting for the Deep Analyst.</p>;
+  }
+  return (
+    <ul className="space-y-2 max-h-[18rem] overflow-y-auto">
+      {items.map((it, i) => (
+        <li key={`${it.uuid}:${i}`} className="flex items-start gap-2 text-xs">
+          <span className="text-emerald-400 shrink-0 mt-0.5">+</span>
+          <Link
+            href={`/story/${it.uuid}`}
+            className="px-1.5 py-0.5 text-[10px] bg-zinc-800 text-zinc-300 rounded shrink-0 hover:bg-zinc-700"
+          >
+            {it.ticker}
+          </Link>
+          <Link
+            href={`/story/${it.uuid}`}
+            className="text-zinc-300 italic leading-snug hover:text-zinc-100"
+          >
+            {it.insight}
+          </Link>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function WatchFlagDigest({ items }: { items: WatchFlagDigestItem[] }) {
+  if (items.length === 0) {
+    return <p className="text-xs text-zinc-500">No flags yet — waiting for the Deep Analyst.</p>;
+  }
+  const order: WatchFlagDigestItem["horizon"][] = ["hours", "days", "weeks", "months"];
+  const grouped = order
+    .map((h) => ({ horizon: h, items: items.filter((i) => i.horizon === h) }))
+    .filter((g) => g.items.length > 0);
+  const horizonCls = (h: WatchFlagDigestItem["horizon"]) =>
+    h === "hours"
+      ? "bg-rose-950/60 text-rose-300 border-rose-900"
+      : h === "days"
+      ? "bg-yellow-950/60 text-yellow-300 border-yellow-900"
+      : h === "weeks"
+      ? "bg-emerald-950/60 text-emerald-300 border-emerald-900"
+      : "bg-zinc-800 text-zinc-400 border-zinc-700";
+  return (
+    <div className="flex flex-col gap-3 max-h-[18rem] overflow-y-auto">
+      {grouped.map((g) => (
+        <div key={g.horizon} className="flex flex-col gap-1.5">
+          <div className="flex items-center gap-2">
+            <span className={`px-2 py-0.5 text-[10px] uppercase tracking-wide rounded border ${horizonCls(g.horizon)}`}>
+              {g.horizon}
+            </span>
+            <span className="text-[10px] text-zinc-600">{g.items.length}</span>
+          </div>
+          <ul className="flex flex-col gap-1 pl-2">
+            {g.items.map((it, i) => (
+              <li key={`${it.uuid}:${i}`} className="flex items-start gap-2 text-xs">
+                <Link
+                  href={`/story/${it.uuid}`}
+                  className="px-1.5 py-0.5 text-[10px] bg-zinc-800 text-zinc-300 rounded shrink-0 hover:bg-zinc-700"
+                >
+                  {it.ticker}
+                </Link>
+                <Link
+                  href={`/story/${it.uuid}`}
+                  className="text-zinc-300 leading-snug hover:text-zinc-100"
+                >
+                  {it.flag}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Empty() {
+  return <p className="text-xs text-zinc-500">…</p>;
 }

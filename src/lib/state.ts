@@ -92,10 +92,24 @@ class CentralStateImpl {
     return next;
   }
 
-  /** Fast existence check used by the workflow's dedup pass. */
+  /**
+   * "Has been judged" check used by the workflow's dedup pass. Returns true
+   * only if the story exists AND already has a verdict — stories registered
+   * as "new" by a previous run that never got judged will return false so
+   * the next poll picks them back up. Without this, any uuid registered as
+   * "new" in a half-finished workflow stayed undead forever (the hExists
+   * check alone treated registration as judgment).
+   */
   async hasUuid(uuid: string): Promise<boolean> {
     const c = await getClient();
-    return Boolean(await c.hExists(STORIES_KEY, uuid));
+    const raw = await c.hGet(STORIES_KEY, uuid);
+    if (!raw) return false;
+    try {
+      const s = JSON.parse(raw) as StoryState;
+      return Boolean(s.verdict);
+    } catch {
+      return false;
+    }
   }
 
   async get(uuid: string): Promise<StoryState | null> {
@@ -178,6 +192,115 @@ class CentralStateImpl {
         lastVerdict: latest.verdict?.verdict,
       };
     });
+  }
+
+  // -------- Insight projections (analysed stories only) --------
+
+  /** All stories whose Deep Analyst step has produced an analysis. */
+  private async listAnalysed(): Promise<StoryState[]> {
+    const xs = await this.listAll();
+    return xs.filter((s): s is StoryState & { analysis: AnalysisResult } => Boolean(s.analysis));
+  }
+
+  async sectionMagnitudeMix(): Promise<{ small: number; material: number; major: number }> {
+    const xs = await this.listAnalysed();
+    const out = { small: 0, material: 0, major: 0 };
+    for (const s of xs) out[s.analysis!.magnitude]++;
+    return out;
+  }
+
+  async sectionDirectionMix(): Promise<{ bullish: number; bearish: number; neutral: number }> {
+    const xs = await this.listAnalysed();
+    const out = { bullish: 0, bearish: 0, neutral: 0 };
+    for (const s of xs) out[s.analysis!.primaryCompany.direction]++;
+    return out;
+  }
+
+  async sectionHorizonMix(): Promise<Record<"days" | "weeks" | "months" | "quarters" | "years", number>> {
+    const xs = await this.listAnalysed();
+    const out = { days: 0, weeks: 0, months: 0, quarters: 0, years: 0 };
+    for (const s of xs) out[s.analysis!.longTermHorizon]++;
+    return out;
+  }
+
+  async sectionHotTickers(limit = 10): Promise<Array<{ ticker: string; weight: number; appearances: number }>> {
+    const xs = await this.listAnalysed();
+    const wByMag = { small: 1, material: 3, major: 8 } as const;
+    const acc = new Map<string, { weight: number; appearances: number }>();
+    const bump = (t: string, w: number) => {
+      if (!t) return;
+      const cur = acc.get(t) ?? { weight: 0, appearances: 0 };
+      cur.weight += w;
+      cur.appearances++;
+      acc.set(t, cur);
+    };
+    for (const s of xs) {
+      const w = wByMag[s.analysis!.magnitude];
+      bump(s.analysis!.primaryCompany.ticker, w);
+      for (const sp of s.analysis!.spillover) {
+        for (const t of sp.candidateTickers) bump(t, w * 0.5);
+      }
+    }
+    return Array.from(acc.entries())
+      .map(([ticker, v]) => ({ ticker, weight: Math.round(v.weight * 10) / 10, appearances: v.appearances }))
+      .sort((a, b) => b.weight - a.weight)
+      .slice(0, limit);
+  }
+
+  async sectionMarketIsMissingDigest(limit = 12): Promise<Array<{
+    insight: string;
+    ticker: string;
+    uuid: string;
+    at: string;
+  }>> {
+    const xs = (await this.listAnalysed()).sort(
+      (a, b) => new Date(b.lastUpdated).getTime() - new Date(a.lastUpdated).getTime(),
+    );
+    const out: Array<{ insight: string; ticker: string; uuid: string; at: string }> = [];
+    for (const s of xs) {
+      for (const m of s.analysis!.signalVsNoise.marketIsMissing) {
+        out.push({
+          insight: m,
+          ticker: s.analysis!.primaryCompany.ticker || s.story.assetTags[0] || "",
+          uuid: s.story.uuid,
+          at: s.lastUpdated,
+        });
+        if (out.length >= limit) return out;
+      }
+    }
+    return out;
+  }
+
+  async sectionWatchFlagDigest(limit = 18): Promise<Array<{
+    flag: string;
+    horizon: "hours" | "days" | "weeks" | "months";
+    ticker: string;
+    uuid: string;
+    at: string;
+  }>> {
+    const xs = (await this.listAnalysed()).sort(
+      (a, b) => new Date(b.lastUpdated).getTime() - new Date(a.lastUpdated).getTime(),
+    );
+    const out: Array<{
+      flag: string;
+      horizon: "hours" | "days" | "weeks" | "months";
+      ticker: string;
+      uuid: string;
+      at: string;
+    }> = [];
+    for (const s of xs) {
+      for (const wf of s.analysis!.watchFlags) {
+        out.push({
+          flag: wf.flag,
+          horizon: wf.horizon,
+          ticker: s.analysis!.primaryCompany.ticker || s.story.assetTags[0] || "",
+          uuid: s.story.uuid,
+          at: s.lastUpdated,
+        });
+        if (out.length >= limit) return out;
+      }
+    }
+    return out;
   }
 
   async summary(): Promise<{
