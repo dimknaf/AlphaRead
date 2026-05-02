@@ -1,39 +1,15 @@
-// Per-event page — server component. Fetches /api/story/<uuid> and renders
-// the 5-section AnalysisResult plus story header. Falls back gracefully when
-// the story is judged but not yet (or never) deeply analyzed.
+// Per-event page — server component. Reads state directly via state.get(uuid)
+// (server runs in Node where the redis client works); no HTTP roundtrip
+// needed. Renders the 5-section AnalysisResult plus story header. Falls back
+// gracefully when the story is judged but not yet (or never) deeply analyzed.
 
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import type { AnalysisResult, JudgeResult, SlimStory, Status } from "@/lib/types";
+import { state } from "@/lib/state";
+import type { AnalysisResult, JudgeResult, Status } from "@/lib/types";
 
-function baseUrl(): string {
-  const explicit = process.env.NEXT_PUBLIC_BASE_URL;
-  if (explicit) return explicit.replace(/\/$/, "");
-  const prodUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL;
-  if (prodUrl) return `https://${prodUrl}`;
-  const v = process.env.VERCEL_URL;
-  if (v) return `https://${v}`;
-  return "http://localhost:3000";
-}
-
-type StoryPayload = {
-  ok: true;
-  story: SlimStory;
-  status: Status;
-  verdict?: JudgeResult;
-  analysis?: AnalysisResult;
-  firstSeen: string;
-  lastUpdated: string;
-};
-
-async function fetchState(uuid: string): Promise<StoryPayload | null> {
-  const r = await fetch(`${baseUrl()}/api/story/${uuid}`, { cache: "no-store" });
-  if (r.status === 404) return null;
-  if (!r.ok) throw new Error(`state fetch failed: ${r.status}`);
-  const j = (await r.json()) as StoryPayload | { ok: false };
-  if (!("ok" in j) || j.ok !== true) return null;
-  return j;
-}
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 export default async function StoryPage({
   params,
@@ -41,7 +17,7 @@ export default async function StoryPage({
   params: Promise<{ uuid: string }>;
 }) {
   const { uuid } = await params;
-  const s = await fetchState(uuid);
+  const s = await state.get(uuid);
   if (!s) notFound();
 
   const { story, status, verdict, analysis } = s;
