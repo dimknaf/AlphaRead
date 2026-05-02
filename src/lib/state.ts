@@ -10,7 +10,11 @@
 // Connection model: a per-process singleton client connected lazily on the
 // first call, kept warm across invocations on the same serverless instance.
 
-import { createClient, type RedisClientType } from "redis";
+// Lazy import of `redis` — the WDK workflow runtime is Edge-like (no Node
+// `Buffer` global) so `redis` cannot be top-level imported. State methods
+// are called from inside "use step" boundaries that run in Node runtime
+// (where Buffer exists), so dynamic `import("redis")` works at call time.
+
 import type {
   ActivityEvent,
   JudgeResult,
@@ -23,14 +27,26 @@ const STORIES_KEY = "alpharead:stories";
 const EVENTS_KEY = "alpharead:events";
 const MAX_EVENTS = 500;
 
-let clientPromise: Promise<RedisClientType> | null = null;
+// Use unknown for the cached client type so we don't have to import the
+// redis types at module load (they'd pull the same Buffer-needing code).
+let clientPromise: Promise<unknown> | null = null;
 
-async function getClient(): Promise<RedisClientType> {
+async function getClient(): Promise<{
+  hGet(key: string, field: string): Promise<string | null>;
+  hSet(key: string, field: string, value: string): Promise<number>;
+  hExists(key: string, field: string): Promise<boolean>;
+  hGetAll(key: string): Promise<Record<string, string>>;
+  lPush(key: string, value: string): Promise<number>;
+  lRange(key: string, start: number, stop: number): Promise<string[]>;
+  lTrim(key: string, start: number, stop: number): Promise<string>;
+  del(key: string): Promise<number>;
+}> {
   if (!clientPromise) {
     const url = process.env.REDIS_URL;
     if (!url) throw new Error("REDIS_URL not set in env (connect a Vercel Marketplace Redis store)");
     clientPromise = (async () => {
-      const c: RedisClientType = createClient({ url });
+      const { createClient } = await import("redis");
+      const c = createClient({ url });
       c.on("error", (err) => {
         console.error("[state] Redis error", err);
       });
@@ -38,7 +54,8 @@ async function getClient(): Promise<RedisClientType> {
       return c;
     })();
   }
-  return clientPromise;
+  // The any-cast is bounded by the structural type returned by getClient.
+  return clientPromise as Promise<ReturnType<typeof getClient> extends Promise<infer T> ? T : never>;
 }
 
 class CentralStateImpl {
