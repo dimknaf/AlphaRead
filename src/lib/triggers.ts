@@ -12,10 +12,6 @@ import { toSlim } from "./types";
 import type { JudgeResult, PollResult, SlimStory, Story } from "./types";
 import { WATCHLIST } from "./watchlist";
 
-// Module-scope dedup cache: uuids we've already judged in this instance.
-// (Vercel KV is post-MVP polish; in-memory works for the demo.)
-const SEEN_UUIDS = new Set<string>();
-
 export type PollOptions = {
   tickers?: readonly string[];
   /** "h1" / "d1" / "w1" / "m1" — defaults to "d1" (last 24h). */
@@ -63,9 +59,9 @@ export async function pollWatchlistOnce(opts: PollOptions = {}): Promise<PollRes
     tickers.map((t) => getStoriesForTicker(t, { timeFilter })),
   );
 
-  // Step 2: flatten + dedupe by uuid (within this run + across-run cache).
+  // Step 2: flatten + dedupe by uuid (within this run + KV-shared across runs).
   const seenInRun = new Set<string>();
-  const fresh: Story[] = [];
+  const candidates: Story[] = [];
   const failedTickers: string[] = [];
   for (let idx = 0; idx < perTicker.length; idx++) {
     const r = perTicker[idx];
@@ -74,27 +70,31 @@ export async function pollWatchlistOnce(opts: PollOptions = {}): Promise<PollRes
       continue;
     }
     for (const s of r.value) {
-      if (seenInRun.has(s.uuid) || SEEN_UUIDS.has(s.uuid)) continue;
+      if (seenInRun.has(s.uuid)) continue;
       seenInRun.add(s.uuid);
-      fresh.push(s);
+      candidates.push(s);
     }
   }
 
-  // Step 3: register fresh stories as "new" in state up front (so dashboard
+  // KV-side dedup: drop stories already in our state (any prior poll, any
+  // serverless instance). Parallel hexists checks.
+  const knownFlags = await Promise.all(candidates.map((s) => state.hasUuid(s.uuid)));
+  const fresh: Story[] = candidates.filter((_s, i) => !knownFlags[i]);
+
+  // Step 3: register fresh stories as "new" in KV up front (so dashboard
   // can show them flowing in even before judging completes).
-  for (const s of fresh) {
-    state.upsert(s.uuid, { story: toSlim(s), status: "new" });
-  }
+  await Promise.all(fresh.map((s) => state.upsert(s.uuid, { story: toSlim(s), status: "new" })));
 
   // Step 4: judge fan-out (concurrency-capped). Each judge call is "use step".
   const judged = await judgeWithLimit(fresh, concurrency);
 
-  // Step 5: state update per verdict + count.
+  // Step 5: state update per verdict + count (sequential to keep KV writes
+  // sane; each is fast).
   const counts = { skip: 0, watch: 0, deep: 0 };
   const deepStories: Array<{ story: SlimStory; judge: JudgeResult }> = [];
   for (const j of judged) {
     counts[j.judge.verdict]++;
-    state.upsert(j.story.uuid, {
+    await state.upsert(j.story.uuid, {
       story: toSlim(j.story),
       status: j.judge.verdict === "skip" ? "skipped" : "judged",
       verdict: j.judge,
@@ -102,7 +102,6 @@ export async function pollWatchlistOnce(opts: PollOptions = {}): Promise<PollRes
     if (j.judge.verdict === "deep") {
       deepStories.push({ story: toSlim(j.story), judge: j.judge });
     }
-    SEEN_UUIDS.add(j.story.uuid);
   }
 
   return {

@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@brightdata/sdk": "^1.1.0",
+    "@vercel/kv": "^3.0.0",
     "@workflow/ai": "^4.1.2",
     "ai": "^6.0.174",
     "next": "16.2.4",
