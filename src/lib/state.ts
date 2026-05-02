@@ -1,16 +1,16 @@
-// Central state for the AlphaRead dashboard, backed by Vercel KV (Upstash
-// Redis under the hood). Shared across serverless instances — the dashboard
+// Central state for the AlphaRead dashboard, backed by Vercel Marketplace
+// Redis (Upstash). Shared across serverless instances — the dashboard
 // (/api/state) sees what the workflow (pollWatchlistOnce) writes regardless
 // of which serverless instance handles each request.
 //
 // Storage layout:
-//   state:stories  (Redis hash)  field=uuid  value=JSON of StoryState
-//   state:events   (Redis list)  newest first, capped at 500 entries (LTRIM)
+//   alpharead:stories  (Redis hash)  field=uuid  value=JSON of StoryState
+//   alpharead:events   (Redis list)  newest first, capped at 500 (LTRIM)
 //
-// All methods are async. Section derivations are pure functions over the
-// loaded data so they can run unchanged client-side or server-side.
+// Connection model: a per-process singleton client connected lazily on the
+// first call, kept warm across invocations on the same serverless instance.
 
-import { kv } from "@vercel/kv";
+import { createClient, type RedisClientType } from "redis";
 import type {
   ActivityEvent,
   JudgeResult,
@@ -19,26 +19,45 @@ import type {
   StoryState,
 } from "./types";
 
-const STORIES_KEY = "state:stories";
-const EVENTS_KEY = "state:events";
+const STORIES_KEY = "alpharead:stories";
+const EVENTS_KEY = "alpharead:events";
 const MAX_EVENTS = 500;
+
+let clientPromise: Promise<RedisClientType> | null = null;
+
+async function getClient(): Promise<RedisClientType> {
+  if (!clientPromise) {
+    const url = process.env.REDIS_URL;
+    if (!url) throw new Error("REDIS_URL not set in env (connect a Vercel Marketplace Redis store)");
+    clientPromise = (async () => {
+      const c: RedisClientType = createClient({ url });
+      c.on("error", (err) => {
+        console.error("[state] Redis error", err);
+      });
+      await c.connect();
+      return c;
+    })();
+  }
+  return clientPromise;
+}
 
 class CentralStateImpl {
   /** Insert or update a story's state. Records an activity event. */
   async upsert(uuid: string, patch: Partial<StoryState> & { story?: SlimStory }): Promise<StoryState> {
+    const c = await getClient();
     const now = new Date().toISOString();
-    const existingRaw = await kv.hget<StoryState>(STORIES_KEY, uuid);
-    const next: StoryState = existingRaw
-      ? { ...existingRaw, ...patch, lastUpdated: now }
+    const existingRaw = await c.hGet(STORIES_KEY, uuid);
+    const existing: StoryState | null = existingRaw ? (JSON.parse(existingRaw) as StoryState) : null;
+    const next: StoryState = existing
+      ? { ...existing, ...patch, lastUpdated: now }
       : {
-          // require a story on first insert
           story: patch.story as SlimStory,
           status: patch.status ?? "new",
           verdict: patch.verdict,
           firstSeen: now,
           lastUpdated: now,
         };
-    await kv.hset(STORIES_KEY, { [uuid]: next });
+    await c.hSet(STORIES_KEY, uuid, JSON.stringify(next));
 
     const ev: ActivityEvent = {
       id: `${next.story.uuid}:${next.status}:${now}`,
@@ -49,25 +68,28 @@ class CentralStateImpl {
       reason: next.verdict?.reason,
       at: now,
     };
-    // lpush newest first, then trim to MAX_EVENTS so the list stays bounded.
-    await kv.lpush(EVENTS_KEY, ev);
-    await kv.ltrim(EVENTS_KEY, 0, MAX_EVENTS - 1);
+    await c.lPush(EVENTS_KEY, JSON.stringify(ev));
+    await c.lTrim(EVENTS_KEY, 0, MAX_EVENTS - 1);
 
     return next;
   }
 
   /** Fast existence check used by the workflow's dedup pass. */
   async hasUuid(uuid: string): Promise<boolean> {
-    return Boolean(await kv.hexists(STORIES_KEY, uuid));
+    const c = await getClient();
+    return Boolean(await c.hExists(STORIES_KEY, uuid));
   }
 
   async get(uuid: string): Promise<StoryState | null> {
-    return kv.hget<StoryState>(STORIES_KEY, uuid);
+    const c = await getClient();
+    const raw = await c.hGet(STORIES_KEY, uuid);
+    return raw ? (JSON.parse(raw) as StoryState) : null;
   }
 
   async listAll(): Promise<StoryState[]> {
-    const all = await kv.hgetall<Record<string, StoryState>>(STORIES_KEY);
-    return all ? Object.values(all) : [];
+    const c = await getClient();
+    const all = await c.hGetAll(STORIES_KEY);
+    return Object.values(all).map((v) => JSON.parse(v) as StoryState);
   }
 
   async listByVerdict(verdict: JudgeResult["verdict"]): Promise<StoryState[]> {
@@ -75,11 +97,12 @@ class CentralStateImpl {
     return xs.filter((s) => s.verdict?.verdict === verdict);
   }
 
-  // -------- Dashboard section projections (async I/O once, pure derivations after) --------
+  // -------- Dashboard section projections --------
 
   async sectionActivityFeed(limit = 100): Promise<ActivityEvent[]> {
-    const slice = await kv.lrange<ActivityEvent>(EVENTS_KEY, 0, limit - 1);
-    return slice ?? [];
+    const c = await getClient();
+    const slice = await c.lRange(EVENTS_KEY, 0, limit - 1);
+    return slice.map((s) => JSON.parse(s) as ActivityEvent);
   }
 
   async sectionTopStories(limit = 10): Promise<Array<{ story: SlimStory; verdict: JudgeResult; lastUpdated: string }>> {
@@ -150,7 +173,8 @@ class CentralStateImpl {
 
   /** Optional: wipe everything (for testing or a "reset" button). */
   async clear(): Promise<void> {
-    await Promise.all([kv.del(STORIES_KEY), kv.del(EVENTS_KEY)]);
+    const c = await getClient();
+    await Promise.all([c.del(STORIES_KEY), c.del(EVENTS_KEY)]);
   }
 }
 
