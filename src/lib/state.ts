@@ -17,6 +17,7 @@
 
 import type {
   ActivityEvent,
+  AnalysisResult,
   JudgeResult,
   SlimStory,
   Status,
@@ -122,12 +123,20 @@ class CentralStateImpl {
     return slice.map((s) => JSON.parse(s) as ActivityEvent);
   }
 
-  async sectionTopStories(limit = 10): Promise<Array<{ story: SlimStory; verdict: JudgeResult; lastUpdated: string }>> {
+  async sectionTopStories(limit = 10): Promise<Array<{
+    story: SlimStory;
+    verdict: JudgeResult;
+    analysis?: AnalysisResult;
+    status: Status;
+    lastUpdated: string;
+  }>> {
     const deep = await this.listByVerdict("deep");
     return deep
       .map((s) => ({
         story: s.story,
         verdict: s.verdict!,
+        analysis: s.analysis,
+        status: s.status,
         lastUpdated: s.lastUpdated,
         rank:
           (s.verdict!.confidence / 100) *

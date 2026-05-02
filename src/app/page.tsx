@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState, useCallback } from "react";
 
 type Summary = {
@@ -31,9 +32,22 @@ type SlimStory = {
   assetTags: string[];
 };
 
+type Magnitude = "small" | "material" | "major";
+type Direction = "bullish" | "bearish" | "neutral";
+type Horizon = "days" | "weeks" | "months" | "quarters" | "years";
+
+type AnalysisPreview = {
+  oneLineSummary: string;
+  magnitude: Magnitude;
+  longTermHorizon: Horizon;
+  primaryCompany: { ticker: string; direction: Direction };
+};
+
 type TopStory = {
   story: SlimStory;
   verdict: { verdict: "deep"; reason: string; confidence: number; longTermAngles?: string[] };
+  analysis?: AnalysisPreview;
+  status: string;
   lastUpdated: string;
 };
 
@@ -243,32 +257,66 @@ function TopStories({ stories }: { stories: TopStory[] }) {
   return (
     <ul className="space-y-3 max-h-[28rem] overflow-y-auto">
       {stories.map((s) => (
-        <li key={s.story.uuid} className="border border-zinc-800 rounded p-2">
+        <li key={s.story.uuid} className="border border-zinc-800 rounded p-2 hover:border-zinc-700 transition-colors">
           <div className="flex items-baseline justify-between gap-2">
-            <span className="text-rose-400 text-[10px] font-semibold">DEEP</span>
+            <div className="flex items-baseline gap-2">
+              <span className="text-rose-400 text-[10px] font-semibold">DEEP</span>
+              {s.analysis && <MagnitudeChip m={s.analysis.magnitude} />}
+              {s.status === "analyzing" && (
+                <span className="text-[10px] text-yellow-400 animate-pulse">analyzing…</span>
+              )}
+            </div>
             <span className="text-[10px] text-zinc-500">
               {s.story.source} · conf {s.verdict.confidence}
             </span>
           </div>
-          <a
-            href={s.story.url}
-            target="_blank"
-            rel="noopener noreferrer"
+          <Link
+            href={`/story/${s.story.uuid}`}
             className="block text-sm text-zinc-100 hover:text-emerald-400 mt-1"
           >
             {s.story.title}
-          </a>
-          <p className="text-xs text-zinc-400 mt-1">{s.verdict.reason}</p>
-          {s.verdict.longTermAngles && s.verdict.longTermAngles.length > 0 && (
-            <ul className="mt-2 text-[11px] text-zinc-500 list-disc list-inside">
-              {s.verdict.longTermAngles.map((a, i) => (
-                <li key={i}>{a}</li>
-              ))}
-            </ul>
+          </Link>
+          {s.analysis ? (
+            <p className="text-xs text-zinc-300 mt-1 leading-relaxed">
+              {s.analysis.oneLineSummary}
+            </p>
+          ) : (
+            <p className="text-xs text-zinc-400 mt-1">{s.verdict.reason}</p>
           )}
+          <div className="flex items-center gap-2 mt-2 text-[10px]">
+            <Link
+              href={`/story/${s.story.uuid}`}
+              className="text-emerald-400 hover:text-emerald-300"
+            >
+              full analysis →
+            </Link>
+            <span className="text-zinc-700">·</span>
+            <a
+              href={s.story.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-zinc-500 hover:text-zinc-300"
+            >
+              source ↗
+            </a>
+          </div>
         </li>
       ))}
     </ul>
+  );
+}
+
+function MagnitudeChip({ m }: { m: Magnitude }) {
+  const cls =
+    m === "major"
+      ? "bg-rose-950/60 text-rose-300 border-rose-900"
+      : m === "material"
+      ? "bg-yellow-950/60 text-yellow-300 border-yellow-900"
+      : "bg-zinc-800 text-zinc-400 border-zinc-700";
+  return (
+    <span className={`px-1.5 py-0.5 text-[9px] uppercase tracking-wide rounded border ${cls}`}>
+      {m}
+    </span>
   );
 }
 
