@@ -61,11 +61,19 @@ async function getClient(): Promise<{
 
 class CentralStateImpl {
   /** Insert or update a story's state. Records an activity event. */
-  async upsert(uuid: string, patch: Partial<StoryState> & { story?: SlimStory }): Promise<StoryState> {
+  async upsert(uuid: string, patch: Partial<StoryState> & { story?: SlimStory }): Promise<StoryState | null> {
     const c = await getClient();
     const now = new Date().toISOString();
     const existingRaw = await c.hGet(STORIES_KEY, uuid);
     const existing: StoryState | null = existingRaw ? (JSON.parse(existingRaw) as StoryState) : null;
+    // Refuse to create a brand-new state without a story — that produces
+    // corrupt entries (story:undefined) that crash every dashboard read.
+    // This can happen during workflow retries when an analyzer step replays
+    // for a uuid whose state was never properly created in this run.
+    if (!existing && !patch.story) {
+      console.error("[state.upsert] refusing to create story-less entry", { uuid, patch });
+      return null;
+    }
     const next: StoryState = existing
       ? { ...existing, ...patch, lastUpdated: now }
       : {
@@ -118,10 +126,28 @@ class CentralStateImpl {
     return raw ? (JSON.parse(raw) as StoryState) : null;
   }
 
+  /**
+   * List all story states, defensively skipping entries that are unparseable
+   * or missing the `story` field. Earlier workflow crash-and-retry races left
+   * a few half-written entries in Redis (`story: undefined`); without this
+   * filter, any `/api/state` projection that touches `s.story.assetTags`
+   * crashes the whole dashboard.
+   */
   async listAll(): Promise<StoryState[]> {
     const c = await getClient();
     const all = await c.hGetAll(STORIES_KEY);
-    return Object.values(all).map((v) => JSON.parse(v) as StoryState);
+    const out: StoryState[] = [];
+    for (const v of Object.values(all)) {
+      try {
+        const s = JSON.parse(v) as StoryState;
+        if (s && s.story && typeof s.story.uuid === "string") {
+          out.push(s);
+        }
+      } catch {
+        // skip — corrupt JSON entry
+      }
+    }
+    return out;
   }
 
   async listByVerdict(verdict: JudgeResult["verdict"]): Promise<StoryState[]> {
