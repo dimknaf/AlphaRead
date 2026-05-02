@@ -12,7 +12,7 @@ import {
   getSectorClassification,
   getSimilarStories,
 } from "./cityfalcon";
-import type { AnalysisResult, Story } from "./types";
+import type { AnalysisResult, EnrichmentBundle, Story } from "./types";
 
 const ANALYSIS_SCHEMA = z.object({
   oneLineSummary: z.string().max(280),
@@ -68,23 +68,23 @@ Be precise about:
 
 Be concise. Avoid corporate-speak. Quote specific numbers when the data supports it; don't make up numbers.`;
 
-type EnrichmentBundle = {
-  similarStories: Array<{ title: string; source: string }>;
-  sectors: Array<{ name: string; slug: string; level: number }>;
-  adjacentCompanies: Array<{ name: string; ticker?: string; sector: string }>;
-};
-
 async function gatherEnrichment(story: Story): Promise<EnrichmentBundle> {
   // Parallel fetches; tolerate per-call failure (don't block the analyst).
   const ticker = story.assetTags[0] ?? "";
   const settled = await Promise.allSettled([
-    getSimilarStories(story.uuid, 5),
+    getSimilarStories(story.uuid, 3),
     ticker ? getSectorClassification(ticker) : Promise.resolve({ classification: [] }),
   ]);
 
   const similarStories =
     settled[0].status === "fulfilled"
-      ? settled[0].value.slice(0, 5).map((s) => ({ title: s.title, source: s.source.name }))
+      ? settled[0].value.slice(0, 3).map((s) => ({
+          title: s.title,
+          source: s.source.name,
+          uuid: s.uuid,
+          url: s.url,
+          publishTime: s.publishTime,
+        }))
       : [];
 
   const sectors =
@@ -100,11 +100,11 @@ async function gatherEnrichment(story: Story): Promise<EnrichmentBundle> {
   if (sectors[0]) {
     try {
       const r = await getCompaniesForSector(sectors[0].slug, sectors[0].level, {
-        maxSecurities: 6,
+        maxSecurities: 4,
       });
       adjacentCompanies = (r.portfolio ?? [])
         .filter((c) => c.ticker && c.ticker !== ticker)
-        .slice(0, 6)
+        .slice(0, 4)
         .map((c) => ({ name: c.name, ticker: c.ticker, sector: sectors[0].name }));
     } catch {
       // ignore
@@ -114,10 +114,20 @@ async function gatherEnrichment(story: Story): Promise<EnrichmentBundle> {
   return { similarStories, sectors, adjacentCompanies };
 }
 
-export async function analyzeNewsImpact(story: Story): Promise<AnalysisResult> {
+export async function analyzeNewsImpact(
+  story: Story,
+): Promise<{ analysis: AnalysisResult; enrichment: EnrichmentBundle }> {
   "use step";
 
+  const tEnrichStart = Date.now();
   const enrichment = await gatherEnrichment(story);
+  console.log("[analyze:enrich] done", {
+    uuid: story.uuid,
+    ms: Date.now() - tEnrichStart,
+    similar: enrichment.similarStories.length,
+    sectors: enrichment.sectors.length,
+    adjacent: enrichment.adjacentCompanies.length,
+  });
 
   const userMsg = `# Story
 Tickers: ${story.assetTags.join(", ") || "(none)"}
@@ -127,7 +137,7 @@ Published: ${story.publishTime}
 Title: ${story.title}
 Description: ${story.description}
 
-# Related coverage (CityFalcon similar_stories, top 5)
+# Related coverage (CityFalcon similar_stories, top 3)
 ${
   enrichment.similarStories.length
     ? enrichment.similarStories.map((s) => `- "${s.title}" (${s.source})`).join("\n")
@@ -152,14 +162,29 @@ ${
 
 Now produce the structured analyst note.`;
 
-  const { object } = await generateObject({
-    model: "anthropic/claude-sonnet-4.6",
-    schema: ANALYSIS_SCHEMA,
-    system: SYSTEM,
-    prompt: userMsg,
-    temperature: 0.2,
-    maxRetries: 1,
-  });
-
-  return object;
+  // 25s ceiling on the LLM call — if Sonnet hangs, the surrounding
+  // analyzeAndRecord try/catch can clean up and move on rather than the
+  // workflow burning its whole maxDuration on one call.
+  const ctrl = new AbortController();
+  const timeoutId = setTimeout(() => ctrl.abort(), 25_000);
+  const tLlmStart = Date.now();
+  try {
+    const { object } = await generateObject({
+      model: "anthropic/claude-sonnet-4.6",
+      schema: ANALYSIS_SCHEMA,
+      system: SYSTEM,
+      prompt: userMsg,
+      temperature: 0.2,
+      maxRetries: 1,
+      abortSignal: ctrl.signal,
+    });
+    console.log("[analyze:llm] done", {
+      uuid: story.uuid,
+      ms: Date.now() - tLlmStart,
+      magnitude: object.magnitude,
+    });
+    return { analysis: object, enrichment };
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }

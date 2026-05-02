@@ -5,7 +5,13 @@
 
 import { NextResponse } from "next/server";
 import { state } from "@/lib/state";
-import type { AnalysisResult, JudgeResult, SlimStory, Status } from "@/lib/types";
+import type {
+  AnalysisResult,
+  EnrichmentBundle,
+  JudgeResult,
+  SlimStory,
+  Status,
+} from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -16,6 +22,7 @@ type UpsertBody = {
   status?: Status;
   verdict?: JudgeResult;
   analysis?: AnalysisResult;
+  enrichment?: EnrichmentBundle;
 };
 
 export async function POST(req: Request) {
@@ -29,6 +36,7 @@ export async function POST(req: Request) {
       status: body.status,
       verdict: body.verdict,
       analysis: body.analysis,
+      enrichment: body.enrichment,
     });
     return NextResponse.json({ ok: true });
   } catch (e) {

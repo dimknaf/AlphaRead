@@ -12,7 +12,15 @@ import { analyzeNewsImpact } from "./analyst";
 import { getStoriesForTicker } from "./cityfalcon";
 import { judgeStory } from "./judge";
 import { toSlim } from "./types";
-import type { AnalysisResult, JudgeResult, PollResult, SlimStory, Status, Story } from "./types";
+import type {
+  AnalysisResult,
+  EnrichmentBundle,
+  JudgeResult,
+  PollResult,
+  SlimStory,
+  Status,
+  Story,
+} from "./types";
 import { WATCHLIST } from "./watchlist";
 
 function baseUrl(): string {
@@ -45,7 +53,13 @@ async function bulkHasUuid(uuids: string[]): Promise<boolean[]> {
 
 async function upsertState(
   uuid: string,
-  patch: { story?: SlimStory; status?: Status; verdict?: JudgeResult; analysis?: AnalysisResult },
+  patch: {
+    story?: SlimStory;
+    status?: Status;
+    verdict?: JudgeResult;
+    analysis?: AnalysisResult;
+    enrichment?: EnrichmentBundle;
+  },
 ): Promise<void> {
   "use step";
   await fetch(`${baseUrl()}/api/state/upsert`, {
@@ -55,15 +69,18 @@ async function upsertState(
   });
 }
 
-/** For each deep verdict: run the Deep Analyst, then write the analysis to state. */
+/** For each deep verdict: run the Deep Analyst, then write the analysis +
+ * enrichment back to state. The enrichment is stored alongside the analysis
+ * so the per-event page can render related coverage and adjacent companies
+ * without re-fetching CityFalcon on every render. */
 async function analyzeAndRecord(story: Story): Promise<void> {
   "use step";
   const t0 = Date.now();
   console.log("[analyze] start", { uuid: story.uuid, ticker: story.assetTags[0] });
   try {
     await upsertState(story.uuid, { status: "analyzing" });
-    const analysis = await analyzeNewsImpact(story);
-    await upsertState(story.uuid, { status: "analyzed", analysis });
+    const { analysis, enrichment } = await analyzeNewsImpact(story);
+    await upsertState(story.uuid, { status: "analyzed", analysis, enrichment });
     console.log("[analyze] done", {
       uuid: story.uuid,
       ms: Date.now() - t0,
@@ -108,23 +125,38 @@ async function chunkedAll<T, R>(
   return out;
 }
 
-/** Wrap judgeStory with a fallback so one Gateway hiccup doesn't fail the chunk. */
-async function judgeOrFallback(story: Story): Promise<{
+/**
+ * Judge a story AND persist the verdict to state, all inside one chunked
+ * fan-out. Removes the prior sequential post-judge state-update loop that
+ * was the dashboard bottleneck — the analyser fan-out used to wait minutes
+ * for ~290 sequential upsertState calls before it could even start. Now
+ * each judge writes its own state in parallel with siblings inside the
+ * chunk, and the analyser fan-out begins right after the last chunk lands.
+ */
+async function judgeAndPersist(story: Story): Promise<{
   story: Story;
   judge: JudgeResult;
+  isDeep: boolean;
   error?: string;
 }> {
   try {
     const judge = await judgeStory(story);
-    return { story, judge };
+    await upsertState(story.uuid, {
+      story: toSlim(story),
+      status: judge.verdict === "skip" ? "skipped" : "judged",
+      verdict: judge,
+    });
+    return { story, judge, isDeep: judge.verdict === "deep" };
   } catch (e) {
     const error = e instanceof Error ? e.message : String(e);
     console.error("[judge] error", { uuid: story.uuid, error });
-    return {
-      story,
-      judge: { verdict: "skip", reason: "judge error", confidence: 0 },
-      error,
-    };
+    const fallback: JudgeResult = { verdict: "skip", reason: "judge error", confidence: 0 };
+    await upsertState(story.uuid, {
+      story: toSlim(story),
+      status: "skipped",
+      verdict: fallback,
+    });
+    return { story, judge: fallback, isDeep: false, error };
   }
 }
 
@@ -135,9 +167,11 @@ export async function pollWatchlistOnce(opts: PollOptions = {}): Promise<PollRes
   const timeFilter = opts.timeFilter ?? "d1";
 
   // Step 1: fan-out fetch (allSettled — coverage gaps don't kill the poll).
+  const tFetchStart = Date.now();
   const perTicker = await Promise.allSettled(
     tickers.map((t) => getStoriesForTicker(t, { timeFilter })),
   );
+  console.log("[workflow] fetch", { ms: Date.now() - tFetchStart, tickers: tickers.length });
 
   // Step 2: flatten + dedupe by uuid (within this run).
   const seenInRun = new Set<string>();
@@ -162,35 +196,38 @@ export async function pollWatchlistOnce(opts: PollOptions = {}): Promise<PollRes
 
   // Step 4: register fresh stories as "new" in KV up front (so dashboard
   // can show them flowing in even before judging completes).
+  const tRegisterStart = Date.now();
   await Promise.all(fresh.map((s) => upsertState(s.uuid, { story: toSlim(s), status: "new" })));
+  console.log("[workflow] register-new", { ms: Date.now() - tRegisterStart, count: fresh.length });
 
-  // Step 5: judge fan-out (concurrency-capped via chunkedAll). Each judge
-  // call is "use step". Chunked Promise.all keeps step ordering deterministic
-  // for WDK's event log; a worker-pool with a shared counter does NOT.
-  const judged = await chunkedAll(fresh, concurrency, judgeOrFallback);
+  // Step 5: judge AND persist verdict in one chunked fan-out. The previous
+  // version had a separate sequential post-judge state-update loop (Step 6)
+  // that took ~90s for 290 stories and blocked the analyser fan-out from
+  // even starting. judgeAndPersist now writes its own state in parallel
+  // inside each chunk, so analyses begin almost immediately after judges.
+  const tJudgeStart = Date.now();
+  const judged = await chunkedAll(fresh, concurrency, judgeAndPersist);
+  console.log("[workflow] judges", { ms: Date.now() - tJudgeStart, count: judged.length });
 
-  // Step 6: state update per verdict + count.
   const counts: Record<"skip" | "watch" | "deep", number> = { skip: 0, watch: 0, deep: 0 };
   const deepStories: Array<{ story: SlimStory; judge: JudgeResult }> = [];
   const deepRaw: Story[] = [];
   for (const j of judged) {
     counts[j.judge.verdict]++;
-    await upsertState(j.story.uuid, {
-      story: toSlim(j.story),
-      status: j.judge.verdict === "skip" ? "skipped" : "judged",
-      verdict: j.judge,
-    });
-    if (j.judge.verdict === "deep") {
+    if (j.isDeep) {
       deepStories.push({ story: toSlim(j.story), judge: j.judge });
       deepRaw.push(j.story);
     }
   }
+  console.log("[workflow] verdicts", counts);
 
-  // Step 7: Deep Analyst fan-out — chunked Promise.all (concurrency 3).
+  // Step 6: Deep Analyst fan-out — chunked Promise.all (concurrency 3).
   // Each story's analyzeAndRecord is "use step"; chunk.map keeps the
   // deterministic ordering WDK requires.
   const analysisConcurrency = 3;
+  const tAnalyzeStart = Date.now();
   await chunkedAll(deepRaw, analysisConcurrency, analyzeAndRecord);
+  console.log("[workflow] analyzers", { ms: Date.now() - tAnalyzeStart, count: deepRaw.length });
 
   return {
     checkedTickers: tickers.length,

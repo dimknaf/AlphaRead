@@ -6,7 +6,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { state } from "@/lib/state";
-import type { AnalysisResult, JudgeResult, Status } from "@/lib/types";
+import type { AnalysisResult, EnrichmentBundle, JudgeResult, Status } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -20,7 +20,7 @@ export default async function StoryPage({
   const s = await state.get(uuid);
   if (!s) notFound();
 
-  const { story, status, verdict, analysis } = s;
+  const { story, status, verdict, analysis, enrichment, firstSeen, lastUpdated } = s;
 
   return (
     <main className="min-h-screen bg-zinc-950 text-zinc-200 font-mono p-4 sm:p-6">
@@ -68,6 +68,9 @@ export default async function StoryPage({
           </div>
         </section>
 
+        {/* Pipeline timeline */}
+        <Timeline firstSeen={firstSeen} lastUpdated={lastUpdated} status={status} />
+
         {verdict && <JudgeCard verdict={verdict} />}
 
         {analysis ? (
@@ -75,8 +78,138 @@ export default async function StoryPage({
         ) : (
           <NoAnalysisCard status={status} />
         )}
+
+        {enrichment && <EnrichmentSection enrichment={enrichment} />}
       </div>
     </main>
+  );
+}
+
+function Timeline({
+  firstSeen,
+  lastUpdated,
+  status,
+}: {
+  firstSeen: string;
+  lastUpdated: string;
+  status: Status;
+}) {
+  const steps: Array<{ label: string; reached: boolean; time?: string }> = [
+    { label: "arrived", reached: true, time: firstSeen.slice(11, 19) },
+    { label: "judged", reached: status !== "new", time: status !== "new" ? lastUpdated.slice(11, 19) : undefined },
+    {
+      label: "analyzed",
+      reached: status === "analyzed",
+      time: status === "analyzed" ? lastUpdated.slice(11, 19) : undefined,
+    },
+  ];
+  return (
+    <section className="bg-zinc-900 border border-zinc-800 rounded p-3">
+      <div className="flex items-center gap-2 sm:gap-4 overflow-x-auto">
+        {steps.map((s, i) => (
+          <div key={s.label} className="flex items-center gap-2 sm:gap-4 shrink-0">
+            <div className="flex items-center gap-2">
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  s.reached ? "bg-emerald-400" : "bg-zinc-700"
+                } ${s.label === "analyzed" && status === "analyzing" ? "animate-pulse bg-yellow-400" : ""}`}
+              />
+              <span
+                className={`text-[10px] uppercase tracking-wide ${
+                  s.reached ? "text-zinc-300" : "text-zinc-600"
+                }`}
+              >
+                {s.label}
+              </span>
+              {s.time && <span className="text-[10px] text-zinc-500">{s.time}</span>}
+            </div>
+            {i < steps.length - 1 && (
+              <span className={`h-px w-6 sm:w-12 ${steps[i + 1].reached ? "bg-emerald-700" : "bg-zinc-800"}`} />
+            )}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function EnrichmentSection({ enrichment }: { enrichment: EnrichmentBundle }) {
+  if (
+    enrichment.similarStories.length === 0 &&
+    enrichment.adjacentCompanies.length === 0 &&
+    enrichment.sectors.length === 0
+  ) {
+    return null;
+  }
+  return (
+    <section className="bg-zinc-900 border border-zinc-800 rounded p-4 flex flex-col gap-4">
+      <span className="text-[10px] uppercase tracking-wide text-zinc-500">
+        analyst's research context
+      </span>
+
+      {enrichment.sectors.length > 0 && (
+        <div className="flex flex-col gap-1">
+          <span className="text-[10px] uppercase tracking-wide text-zinc-500">
+            sector classification
+          </span>
+          <div className="flex items-center gap-2 flex-wrap">
+            {enrichment.sectors.map((s) => (
+              <span
+                key={s.slug}
+                className="px-2 py-1 text-[11px] bg-zinc-800 border border-zinc-700 text-zinc-300 rounded"
+              >
+                {s.name}
+                <span className="ml-1 text-[9px] text-zinc-500">L{s.level}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {enrichment.similarStories.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <span className="text-[10px] uppercase tracking-wide text-zinc-500">
+            related coverage
+          </span>
+          <ul className="flex flex-col gap-1.5">
+            {enrichment.similarStories.map((s) => (
+              <li key={s.uuid} className="flex items-baseline gap-2 text-xs">
+                <span className="text-zinc-600 shrink-0">·</span>
+                <a
+                  href={s.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-zinc-300 hover:text-emerald-400 leading-snug flex-1"
+                >
+                  {s.title}
+                </a>
+                <span className="text-[10px] text-zinc-600 shrink-0">{s.source}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {enrichment.adjacentCompanies.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <span className="text-[10px] uppercase tracking-wide text-zinc-500">
+            adjacent companies in primary sector
+          </span>
+          <div className="flex items-center gap-2 flex-wrap">
+            {enrichment.adjacentCompanies.map((c) => (
+              <span
+                key={c.name}
+                className="px-2 py-1 text-[11px] bg-zinc-800 border border-zinc-700 text-zinc-300 rounded"
+                title={c.sector}
+              >
+                {c.ticker ? <span className="font-semibold mr-1">{c.ticker}</span> : null}
+                <span className={c.ticker ? "text-zinc-400" : ""}>{c.name}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 

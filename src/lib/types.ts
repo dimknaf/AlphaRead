@@ -139,12 +139,29 @@ export type AnalysisResult = {
   }>;
 };
 
+/** Context the Deep Analyst gathered before the LLM call — useful for the
+ * per-event page (related coverage list, sector classification, adjacent
+ * companies) so we don't re-fetch on every render. */
+export type EnrichmentBundle = {
+  similarStories: Array<{
+    title: string;
+    source: string;
+    uuid: string;
+    url: string;
+    publishTime: string;
+  }>;
+  sectors: Array<{ name: string; slug: string; level: number }>;
+  adjacentCompanies: Array<{ name: string; ticker?: string; sector: string }>;
+};
+
 export type StoryState = {
   story: SlimStory;
   status: Status;
   verdict?: JudgeResult;
   /** Populated when the Deep Analyst step completes. */
   analysis?: AnalysisResult;
+  /** Captured by the Deep Analyst for surfacing on the per-event page. */
+  enrichment?: EnrichmentBundle;
   firstSeen: string;
   lastUpdated: string;
 };

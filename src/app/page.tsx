@@ -168,7 +168,32 @@ export default function Page() {
         <>
           <SummaryRow s={data?.summary} />
 
-          {/* NEW — Insights tile row (4 cards) */}
+          {/* HERO STRIP — analyses front-and-center */}
+          <Hero
+            magnitudeMix={data?.magnitudeMix}
+            directionMix={data?.directionMix}
+            hotTickers={data?.hotTickers ?? []}
+          />
+
+          {/* MAIN INSIGHT RAIL — Today's deep reads + market-is-missing */}
+          <div className="grid grid-cols-1 lg:grid-cols-5 gap-3">
+            <Section
+              title="Today's deep reads"
+              hint="Top analyst notes. Click for the full structured analysis."
+              className="lg:col-span-3"
+            >
+              <DeepReadsHero stories={data?.topStories ?? []} />
+            </Section>
+            <Section
+              title="What the market is missing"
+              hint="Edges the consensus is overlooking right now."
+              className="lg:col-span-2"
+            >
+              <MarketMissingDigest items={data?.marketIsMissingDigest ?? []} />
+            </Section>
+          </div>
+
+          {/* QUICK STATS — magnitude / direction / horizon / hot tickers */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             <Section title="Impact magnitude" hint="Across analyzed stories.">
               <MagnitudeMixTile data={data?.magnitudeMix} />
@@ -184,16 +209,12 @@ export default function Page() {
             </Section>
           </div>
 
-          {/* NEW — Two-col digest */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-            <Section title="What the market is missing" hint="Insights the consensus is overlooking.">
-              <MarketMissingDigest items={data?.marketIsMissingDigest ?? []} />
-            </Section>
-            <Section title="Watch flags" hint="Forward-looking signals from the analyst, by horizon.">
-              <WatchFlagDigest items={data?.watchFlagDigest ?? []} />
-            </Section>
-          </div>
+          {/* WATCH FLAGS digest (full-width) */}
+          <Section title="Watch flags" hint="Forward-looking signals from the analyst, by horizon.">
+            <WatchFlagDigest items={data?.watchFlagDigest ?? []} />
+          </Section>
 
+          {/* OPERATIONS — feed + secondary tiles */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             <Section title="Activity feed" hint="Newest first. Color-coded by verdict.">
               <ActivityFeed events={data?.activityFeed ?? []} />
@@ -251,9 +272,10 @@ function Section({
   title,
   hint,
   children,
-}: { title: string; hint?: string; children: React.ReactNode }) {
+  className = "",
+}: { title: string; hint?: string; children: React.ReactNode; className?: string }) {
   return (
-    <section className="bg-zinc-900 border border-zinc-800 rounded">
+    <section className={`bg-zinc-900 border border-zinc-800 rounded ${className}`}>
       <header className="px-3 py-2 border-b border-zinc-800">
         <h2 className="text-sm font-semibold text-zinc-200">{title}</h2>
         {hint && <p className="text-[10px] text-zinc-500 mt-0.5">{hint}</p>}
@@ -579,4 +601,232 @@ function WatchFlagDigest({ items }: { items: WatchFlagDigestItem[] }) {
 
 function Empty() {
   return <p className="text-xs text-zinc-500">…</p>;
+}
+
+// ---------------- Hero strip ----------------
+
+function Hero({
+  magnitudeMix,
+  directionMix,
+  hotTickers,
+}: {
+  magnitudeMix?: MagnitudeMix;
+  directionMix?: DirectionMix;
+  hotTickers: HotTicker[];
+}) {
+  const totalAnalysed =
+    (magnitudeMix?.small ?? 0) + (magnitudeMix?.material ?? 0) + (magnitudeMix?.major ?? 0);
+  const totalDirected =
+    (directionMix?.bullish ?? 0) + (directionMix?.bearish ?? 0) + (directionMix?.neutral ?? 0);
+  return (
+    <section className="bg-gradient-to-br from-zinc-900 via-zinc-900 to-zinc-950 border border-zinc-800 rounded p-4 sm:p-5 flex flex-col gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+        {/* Big stat */}
+        <div className="flex flex-col">
+          <span className="text-[10px] uppercase tracking-wide text-zinc-500">
+            deep analyses today
+          </span>
+          <span className="text-5xl sm:text-6xl font-bold tracking-tight text-emerald-400 leading-none mt-1">
+            {totalAnalysed}
+          </span>
+          <span className="text-[10px] text-zinc-500 mt-1">
+            structured analyst notes from Sonnet 4.6
+          </span>
+        </div>
+
+        {/* Magnitude bar (fat) */}
+        <div className="flex flex-col gap-2">
+          <span className="text-[10px] uppercase tracking-wide text-zinc-500">
+            impact magnitude
+          </span>
+          <FatMagnitudeBar data={magnitudeMix} />
+          <div className="flex justify-between text-[10px] text-zinc-500">
+            <span>small {magnitudeMix?.small ?? 0}</span>
+            <span className="text-yellow-400">material {magnitudeMix?.material ?? 0}</span>
+            <span className="text-rose-400">major {magnitudeMix?.major ?? 0}</span>
+          </div>
+        </div>
+
+        {/* Direction ratio */}
+        <div className="flex flex-col gap-2">
+          <span className="text-[10px] uppercase tracking-wide text-zinc-500">
+            sentiment of analysis
+          </span>
+          <DirectionRatio data={directionMix} />
+          <div className="flex justify-between text-[10px] text-zinc-500">
+            <span className="text-emerald-400">bull {directionMix?.bullish ?? 0}</span>
+            <span>neutral {directionMix?.neutral ?? 0}</span>
+            <span className="text-rose-400">bear {directionMix?.bearish ?? 0}</span>
+          </div>
+        </div>
+      </div>
+
+      {hotTickers.length > 0 && (
+        <div className="flex items-center gap-2 flex-wrap pt-2 border-t border-zinc-800">
+          <span className="text-[10px] uppercase tracking-wide text-zinc-500 mr-1">
+            most affected:
+          </span>
+          {hotTickers.slice(0, 8).map((t, i) => (
+            <span
+              key={t.ticker}
+              className={`px-2 py-1 text-[11px] rounded border ${
+                i === 0
+                  ? "bg-emerald-950/60 border-emerald-900 text-emerald-300 font-semibold"
+                  : "bg-zinc-800 border-zinc-700 text-zinc-300"
+              }`}
+            >
+              {t.ticker}{" "}
+              <span className="text-[9px] opacity-60">×{t.appearances}</span>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {totalAnalysed === 0 && (
+        <p className="text-xs text-zinc-500 italic">
+          {totalDirected === 0
+            ? "Waiting for the Deep Analyst to produce its first note. Hit \"Run poll now\" if nothing appears in the next minute."
+            : "Analyses are arriving — refresh shortly."}
+        </p>
+      )}
+    </section>
+  );
+}
+
+function FatMagnitudeBar({ data }: { data?: MagnitudeMix }) {
+  const total = (data?.small ?? 0) + (data?.material ?? 0) + (data?.major ?? 0);
+  if (total === 0) {
+    return <div className="h-12 bg-zinc-800/60 border border-zinc-800 rounded" />;
+  }
+  const seg = (n: number, cls: string, label: string) => {
+    const pct = (n / total) * 100;
+    if (pct < 1) return null;
+    return (
+      <div
+        key={label}
+        className={`${cls} flex items-center justify-center text-sm font-bold text-zinc-950`}
+        style={{ width: `${pct}%` }}
+        title={`${label}: ${n}`}
+      >
+        {pct >= 10 ? n : ""}
+      </div>
+    );
+  };
+  return (
+    <div className="flex h-12 rounded overflow-hidden border border-zinc-700">
+      {seg(data?.small ?? 0, "bg-zinc-500", "small")}
+      {seg(data?.material ?? 0, "bg-yellow-500", "material")}
+      {seg(data?.major ?? 0, "bg-rose-500", "major")}
+    </div>
+  );
+}
+
+function DirectionRatio({ data }: { data?: DirectionMix }) {
+  const total = (data?.bullish ?? 0) + (data?.bearish ?? 0) + (data?.neutral ?? 0);
+  if (total === 0) {
+    return <div className="h-12 bg-zinc-800/60 border border-zinc-800 rounded" />;
+  }
+  const seg = (n: number, cls: string, label: string) => {
+    const pct = (n / total) * 100;
+    if (pct < 1) return null;
+    return (
+      <div
+        key={label}
+        className={`${cls} flex items-center justify-center text-sm font-bold text-zinc-950`}
+        style={{ width: `${pct}%` }}
+        title={`${label}: ${n}`}
+      >
+        {pct >= 10 ? n : ""}
+      </div>
+    );
+  };
+  return (
+    <div className="flex h-12 rounded overflow-hidden border border-zinc-700">
+      {seg(data?.bullish ?? 0, "bg-emerald-500", "bullish")}
+      {seg(data?.neutral ?? 0, "bg-zinc-500", "neutral")}
+      {seg(data?.bearish ?? 0, "bg-rose-500", "bearish")}
+    </div>
+  );
+}
+
+// ---------------- Today's deep reads (large, prominent) ----------------
+
+function DeepReadsHero({ stories }: { stories: TopStory[] }) {
+  const analysed = stories.filter((s) => s.analysis);
+  if (analysed.length === 0) {
+    if (stories.length > 0) {
+      return (
+        <p className="text-xs text-zinc-500 italic">
+          {stories.length} deep verdict{stories.length === 1 ? "" : "s"} queued. The Deep Analyst is
+          working — full analyses appear here as they complete.
+        </p>
+      );
+    }
+    return (
+      <p className="text-xs text-zinc-500 italic">
+        No deep stories yet. Hit &quot;Run poll now&quot; to seed the dashboard.
+      </p>
+    );
+  }
+  return (
+    <ul className="flex flex-col gap-3 max-h-[34rem] overflow-y-auto pr-1">
+      {analysed.slice(0, 6).map((s) => (
+        <li
+          key={s.story.uuid}
+          className="border border-zinc-800 rounded p-3 hover:border-zinc-700 hover:bg-zinc-950/40 transition-colors"
+        >
+          <div className="flex items-baseline gap-2 flex-wrap mb-1">
+            {s.analysis && <MagnitudeChip m={s.analysis.magnitude} />}
+            {s.analysis && <DirectionChip d={s.analysis.primaryCompany.direction} />}
+            <span className="text-[10px] text-zinc-500">
+              {s.analysis?.primaryCompany.ticker || s.story.assetTags[0]} ·{" "}
+              {s.analysis?.longTermHorizon}
+            </span>
+            <span className="ml-auto text-[10px] text-zinc-600">{s.story.source}</span>
+          </div>
+          <Link
+            href={`/story/${s.story.uuid}`}
+            className="block text-base sm:text-lg text-zinc-100 hover:text-emerald-400 leading-snug"
+          >
+            {s.story.title}
+          </Link>
+          {s.analysis && (
+            <p className="text-sm text-zinc-300 mt-2 leading-relaxed">
+              {s.analysis.oneLineSummary}
+            </p>
+          )}
+          <div className="flex items-center gap-3 mt-3 text-[10px]">
+            <Link
+              href={`/story/${s.story.uuid}`}
+              className="text-emerald-400 hover:text-emerald-300 font-semibold"
+            >
+              full analysis →
+            </Link>
+            <a
+              href={s.story.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-zinc-500 hover:text-zinc-300"
+            >
+              source ↗
+            </a>
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function DirectionChip({ d }: { d: Direction }) {
+  const cls =
+    d === "bullish"
+      ? "bg-emerald-950/60 border-emerald-900 text-emerald-300"
+      : d === "bearish"
+      ? "bg-rose-950/60 border-rose-900 text-rose-300"
+      : "bg-zinc-800 border-zinc-700 text-zinc-400";
+  return (
+    <span className={`px-1.5 py-0.5 text-[9px] uppercase tracking-wide rounded border ${cls}`}>
+      {d}
+    </span>
+  );
 }
