@@ -83,6 +83,22 @@ class CentralStateImpl {
           firstSeen: now,
           lastUpdated: now,
         };
+
+    // Never-wipe guard: a partial patch must NEVER nullify a verdict, analysis
+    // or enrichment that already exists. Spread merging plus an explicit
+    // {verdict: undefined} from a caller (or JSON quirks) was wiping deep
+    // verdicts to null. This forces those three fields to be strictly
+    // additive — once set they survive every subsequent partial upsert.
+    if (existing?.verdict && !next.verdict) {
+      next.verdict = existing.verdict;
+    }
+    if (existing?.analysis && !next.analysis) {
+      next.analysis = existing.analysis;
+    }
+    if (existing?.enrichment && !next.enrichment) {
+      next.enrichment = existing.enrichment;
+    }
+
     await c.hSet(STORIES_KEY, uuid, JSON.stringify(next));
 
     const ev: ActivityEvent = {
@@ -153,6 +169,15 @@ class CentralStateImpl {
   async listByVerdict(verdict: JudgeResult["verdict"]): Promise<StoryState[]> {
     const xs = await this.listAll();
     return xs.filter((s) => s.verdict?.verdict === verdict);
+  }
+
+  /** Stories that were judged "deep" but never got an analysis persisted.
+   * Used by pollWatchlistOnce as a recovery pass — these would otherwise
+   * stay orphans forever because dedup excludes them on every subsequent
+   * poll (their verdict is set, so hasUuid returns true). */
+  async listDeepOrphans(): Promise<StoryState[]> {
+    const xs = await this.listAll();
+    return xs.filter((s) => s.verdict?.verdict === "deep" && !s.analysis);
   }
 
   // -------- Dashboard section projections --------

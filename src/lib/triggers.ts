@@ -20,6 +20,7 @@ import type {
   SlimStory,
   Status,
   Story,
+  StoryState,
 } from "./types";
 import { WATCHLIST } from "./watchlist";
 
@@ -38,6 +39,43 @@ function baseUrl(): string {
 
 // "use step" wrappers: fetch from inside workflow context is forbidden, but
 // step functions run in regular Node runtime where global fetch is available.
+
+/** Fetch deep-verdict stories that don't have analysis yet, via the
+ * HTTP-bridge route (workflow runtime can't import redis directly). */
+async function fetchOrphans(): Promise<Array<{ uuid: string; slim: SlimStory; verdict: JudgeResult }>> {
+  "use step";
+  const r = await fetch(`${baseUrl()}/api/state/orphans`, { cache: "no-store" });
+  if (!r.ok) return [];
+  const j = (await r.json()) as { ok: boolean; orphans?: Array<{ uuid: string; slim: SlimStory; verdict: JudgeResult }> };
+  return j.orphans ?? [];
+}
+
+/** Reconstruct a minimal Story from SlimStory so analyzeAndRecord (which
+ * takes a Story) can run on an orphan. The CityFalcon enrichment in the
+ * analyser only reads assetTags + uuid + title + description anyway. */
+function reconstructStory(slim: SlimStory): Story {
+  return {
+    uuid: slim.uuid,
+    title: slim.title,
+    description: slim.description,
+    url: slim.url,
+    lang: "en",
+    source: { name: slim.source },
+    sentiment: slim.sentiment,
+    cityfalconScore: slim.cityfalconScore,
+    publishTime: slim.publishTime,
+    paywall: false,
+    registrationRequired: false,
+    duplicatesCount: slim.duplicatesCount,
+    assetTags: slim.assetTags,
+  };
+}
+
+async function analyzeOrphan(o: { uuid: string; slim: SlimStory; verdict: JudgeResult }): Promise<void> {
+  "use step";
+  const story = reconstructStory(o.slim);
+  await analyzeAndRecord(story);
+}
 
 async function bulkHasUuid(uuids: string[]): Promise<boolean[]> {
   "use step";
@@ -165,6 +203,22 @@ export async function pollWatchlistOnce(opts: PollOptions = {}): Promise<PollRes
   const tickers = opts.tickers ?? WATCHLIST;
   const concurrency = opts.judgeConcurrency ?? 8;
   const timeFilter = opts.timeFilter ?? "d1";
+
+  // Step 0: recover orphaned deep verdicts — stories judged "deep" in a
+  // prior poll that never had their analyser step complete. They'd otherwise
+  // stay orphans forever because dedup excludes them. Capped at 20 per run
+  // so a backlog can't blow the workflow's maxDuration.
+  const tOrphanStart = Date.now();
+  const orphans = await fetchOrphans();
+  const orphanBatch = orphans.slice(0, 20);
+  console.log("[workflow] orphan-recovery", {
+    found: orphans.length,
+    processing: orphanBatch.length,
+  });
+  if (orphanBatch.length > 0) {
+    await chunkedAll(orphanBatch, 3, analyzeOrphan);
+    console.log("[workflow] orphan-recovery done", { ms: Date.now() - tOrphanStart });
+  }
 
   // Step 1: fan-out fetch (allSettled — coverage gaps don't kill the poll).
   const tFetchStart = Date.now();
