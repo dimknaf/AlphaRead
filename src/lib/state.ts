@@ -242,17 +242,33 @@ class CentralStateImpl {
       .map(({ rank: _r, ...rest }) => rest);
   }
 
-  async sectionSectorWatch(): Promise<Array<{ ticker: string; count: number }>> {
+  /** Real sector aggregation across analysed deep stories. Pulls sector
+   * names from BOTH the LLM-produced `analysis.spillover[].sector` and the
+   * CityFalcon DCSC `enrichment.sectors[].name` so we surface sectors even
+   * when DCSC happens to return nothing for a ticker. Counts unique stories
+   * per sector (a story mentioning a sector twice still counts once). */
+  async sectionSectorWatch(): Promise<Array<{ sector: string; count: number }>> {
     const since = Date.now() - 24 * 3600 * 1000;
     const counts = new Map<string, number>();
-    for (const s of await this.listByVerdict("deep")) {
+    for (const s of await this.listAnalysed()) {
       if (new Date(s.lastUpdated).getTime() < since) continue;
-      const t = s.story.assetTags[0] ?? "unknown";
-      counts.set(t, (counts.get(t) ?? 0) + 1);
+      const sectorsForStory = new Set<string>();
+      // From LLM spillover
+      for (const sp of s.analysis!.spillover ?? []) {
+        if (sp.sector) sectorsForStory.add(sp.sector);
+      }
+      // From CityFalcon DCSC enrichment (when populated)
+      for (const sec of s.enrichment?.sectors ?? []) {
+        if (sec.name) sectorsForStory.add(sec.name);
+      }
+      for (const sec of sectorsForStory) {
+        counts.set(sec, (counts.get(sec) ?? 0) + 1);
+      }
     }
     return Array.from(counts.entries())
-      .map(([ticker, count]) => ({ ticker, count }))
-      .sort((a, b) => b.count - a.count);
+      .map(([sector, count]) => ({ sector, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 12);
   }
 
   async sectionCompaniesUnderWatch(tickers: readonly string[]): Promise<Array<{

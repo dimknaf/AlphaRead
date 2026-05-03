@@ -52,7 +52,7 @@ type TopStory = {
   lastUpdated: string;
 };
 
-type SectorCount = { ticker: string; count: number };
+type SectorCount = { sector: string; count: number };
 
 type CompanyRow = {
   ticker: string;
@@ -224,7 +224,7 @@ export default function Page() {
               <TopStories stories={data?.topStories ?? []} />
             </Section>
             <div className="flex flex-col gap-4">
-              <Section title="Sector watch" hint="Deep-verdict count per ticker, last 24h.">
+              <Section title="Sector watch" hint="Sectors mentioned across analysed deep stories, last 24h.">
                 <SectorWatch counts={data?.sectorWatch ?? []} />
               </Section>
               <Section title="Companies under watch" hint="Last verdict per ticker.">
@@ -398,11 +398,13 @@ function SectorWatch({ counts }: { counts: SectorCount[] }) {
     return <p className="text-xs text-zinc-500">No sector activity yet.</p>;
   }
   return (
-    <ul className="text-xs space-y-1">
+    <ul className="text-xs space-y-1 max-h-[18rem] overflow-y-auto">
       {counts.map((c) => (
-        <li key={c.ticker} className="flex items-baseline justify-between">
-          <span className="text-zinc-300">{c.ticker}</span>
-          <span className="text-rose-400 font-semibold">{c.count}</span>
+        <li key={c.sector} className="flex items-baseline justify-between gap-2">
+          <span className="text-zinc-300 truncate" title={c.sector}>
+            {c.sector}
+          </span>
+          <span className="text-rose-400 font-semibold shrink-0">{c.count}</span>
         </li>
       ))}
     </ul>
