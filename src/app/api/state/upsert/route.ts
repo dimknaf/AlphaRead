@@ -31,12 +31,28 @@ export async function POST(req: Request) {
     if (!body?.uuid) {
       return NextResponse.json({ ok: false, error: "uuid required" }, { status: 400 });
     }
-    await state.upsert(body.uuid, {
+    // Verbose entry log so we can correlate every workflow upsert with its
+    // outcome. Surfaces SPRINT 10 silent-write-failure pattern.
+    console.log("[upsert] in", {
+      uuid: body.uuid,
+      patchKeys: Object.keys(body).filter((k) => k !== "uuid"),
+      status: body.status,
+      verdictVerdict: body.verdict?.verdict,
+      hasAnalysis: Boolean(body.analysis),
+    });
+    const result = await state.upsert(body.uuid, {
       story: body.story,
       status: body.status,
       verdict: body.verdict,
       analysis: body.analysis,
       enrichment: body.enrichment,
+    });
+    console.log("[upsert] out", {
+      uuid: body.uuid,
+      ok: result !== null,
+      finalStatus: result?.status,
+      finalVerdict: result?.verdict?.verdict,
+      finalHasAnalysis: Boolean(result?.analysis),
     });
     return NextResponse.json({ ok: true });
   } catch (e) {

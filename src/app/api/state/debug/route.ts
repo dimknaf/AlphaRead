@@ -1,7 +1,8 @@
-// GET /api/state/debug — diagnostic snapshot of every entry in state,
-// bucketed by (status × hasVerdict × hasAnalysis). Used to chase the
-// "Berkshire shows analyzed individually but byStatus.analyzed = 0"
-// counter discrepancy and similar corruption-shaped bugs.
+// GET /api/state/debug — bucketed snapshot of every state entry.
+// GET /api/state/debug?uuid=XXX — diff a specific uuid via state.get() (hGet)
+// vs listAll() (hGetAll-then-filter). Used to chase the "shows analyzed
+// individually but byStatus.analyzed = 0" inconsistency for Microsoft and
+// Merck-style entries.
 
 import { NextResponse } from "next/server";
 import { state } from "@/lib/state";
@@ -9,8 +10,50 @@ import { state } from "@/lib/state";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
+    const url = new URL(req.url);
+    const uuid = url.searchParams.get("uuid");
+
+    if (uuid) {
+      // Diff mode — compare the two read paths for one specific story.
+      const viaGet = await state.get(uuid);
+      const all = await state.listAll();
+      const viaListAll = all.find((s) => s.story?.uuid === uuid) ?? null;
+      // Also raw hGetAll without listAll's filter, to see whether the entry
+      // exists in Redis but gets dropped by the filter.
+      const allRaw = await state.listAllRaw();
+      const rawForUuid = allRaw[uuid] ?? null;
+
+      const diff = (() => {
+        if (!viaGet && !viaListAll) return "not-found-in-either";
+        if (viaGet && !viaListAll) return "in-hGet-but-NOT-in-listAll";
+        if (!viaGet && viaListAll) return "in-listAll-but-NOT-in-hGet";
+        // Both exist — compare key fields.
+        const a = viaGet!;
+        const b = viaListAll!;
+        const fields = ["status"] as const;
+        for (const f of fields) {
+          if (a[f] !== b[f]) return `field-mismatch:${f}`;
+        }
+        if ((a.verdict?.verdict ?? null) !== (b.verdict?.verdict ?? null))
+          return "field-mismatch:verdict";
+        if (Boolean(a.analysis) !== Boolean(b.analysis))
+          return "field-mismatch:analysis-presence";
+        return "identical";
+      })();
+
+      return NextResponse.json({
+        uuid,
+        diff,
+        viaGet,
+        viaListAll,
+        rawJsonInHash: rawForUuid,
+        rawListAllSize: Object.keys(allRaw).length,
+      });
+    }
+
+    // Default mode — bucket all entries.
     const all = await state.listAll();
     const samples: Record<string, Array<Record<string, unknown>>> = {};
     const counts: Record<string, number> = {};

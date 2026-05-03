@@ -164,6 +164,14 @@ class CentralStateImpl {
     return raw ? (JSON.parse(raw) as StoryState) : null;
   }
 
+  /** Raw hash dump — every uuid → JSON string, no parsing or filtering.
+   * Lets the diff endpoint inspect what's actually stored in Redis without
+   * the listAll filter potentially hiding malformed entries. */
+  async listAllRaw(): Promise<Record<string, string>> {
+    const c = await getClient();
+    return c.hGetAll(STORIES_KEY);
+  }
+
   /**
    * List all story states, defensively skipping entries that are unparseable
    * or missing the `story` field. Earlier workflow crash-and-retry races left
