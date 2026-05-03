@@ -272,6 +272,9 @@ function NoAnalysisCard({ status }: { status: Status }) {
 function AnalysisSections({ a }: { a: AnalysisResult }) {
   return (
     <>
+      {/* Hero visuals — magnitude gauge + direction pills + horizon strip */}
+      <AnalysisHero a={a} />
+
       {/* Section 1 — headline */}
       <section className="bg-zinc-900 border border-zinc-800 rounded p-4 flex flex-col gap-3">
         <div className="flex items-baseline gap-2 flex-wrap">
@@ -426,5 +429,92 @@ function HorizonChip({ h }: { h: string }) {
     <span className="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded border border-zinc-700 text-zinc-400">
       {h}
     </span>
+  );
+}
+
+function AnalysisHero({ a }: { a: AnalysisResult }) {
+  const horizons: Array<AnalysisResult["longTermHorizon"]> = [
+    "days",
+    "weeks",
+    "months",
+    "quarters",
+    "years",
+  ];
+  const magClass = (m: AnalysisResult["magnitude"], target: AnalysisResult["magnitude"]) =>
+    m === target
+      ? target === "major"
+        ? "bg-rose-500 text-zinc-950 font-bold"
+        : target === "material"
+        ? "bg-yellow-500 text-zinc-950 font-bold"
+        : "bg-zinc-500 text-zinc-950 font-bold"
+      : "bg-zinc-800 text-zinc-600";
+
+  const dirClass = (d: AnalysisResult["primaryCompany"]["direction"], target: AnalysisResult["primaryCompany"]["direction"]) =>
+    d === target
+      ? target === "bullish"
+        ? "bg-emerald-500 text-zinc-950"
+        : target === "bearish"
+        ? "bg-rose-500 text-zinc-950"
+        : "bg-zinc-500 text-zinc-950"
+      : "bg-zinc-800 text-zinc-600";
+
+  return (
+    <section className="bg-gradient-to-br from-zinc-900 via-zinc-900 to-zinc-950 border border-zinc-800 rounded p-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+      {/* Magnitude gauge */}
+      <div className="flex flex-col gap-2">
+        <span className="text-[10px] uppercase tracking-wide text-zinc-500">magnitude</span>
+        <div className="flex h-10 rounded overflow-hidden border border-zinc-700">
+          <div className={`flex-1 flex items-center justify-center text-[10px] uppercase ${magClass(a.magnitude, "small")}`}>
+            small
+          </div>
+          <div className={`flex-1 flex items-center justify-center text-[10px] uppercase ${magClass(a.magnitude, "material")}`}>
+            material
+          </div>
+          <div className={`flex-1 flex items-center justify-center text-[10px] uppercase ${magClass(a.magnitude, "major")}`}>
+            major
+          </div>
+        </div>
+      </div>
+
+      {/* Direction pill row */}
+      <div className="flex flex-col gap-2">
+        <span className="text-[10px] uppercase tracking-wide text-zinc-500">
+          primary direction · {a.primaryCompany.ticker}
+        </span>
+        <div className="flex h-10 rounded overflow-hidden border border-zinc-700">
+          <div className={`flex-1 flex items-center justify-center text-[10px] uppercase ${dirClass(a.primaryCompany.direction, "bullish")}`}>
+            bullish
+          </div>
+          <div className={`flex-1 flex items-center justify-center text-[10px] uppercase ${dirClass(a.primaryCompany.direction, "neutral")}`}>
+            neutral
+          </div>
+          <div className={`flex-1 flex items-center justify-center text-[10px] uppercase ${dirClass(a.primaryCompany.direction, "bearish")}`}>
+            bearish
+          </div>
+        </div>
+      </div>
+
+      {/* Horizon mini-chart */}
+      <div className="flex flex-col gap-2">
+        <span className="text-[10px] uppercase tracking-wide text-zinc-500">long-term horizon</span>
+        <div className="flex items-end gap-1 h-10">
+          {horizons.map((h, i) => {
+            const active = h === a.longTermHorizon;
+            const height = ((i + 1) / horizons.length) * 100;
+            return (
+              <div key={h} className="flex-1 flex flex-col items-center justify-end gap-1">
+                <div
+                  className={`w-full rounded-sm ${active ? "bg-emerald-400" : "bg-zinc-800"}`}
+                  style={{ height: `${height}%` }}
+                />
+                <span className={`text-[9px] uppercase ${active ? "text-emerald-400 font-semibold" : "text-zinc-600"}`}>
+                  {h.slice(0, 1)}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </section>
   );
 }

@@ -99,6 +99,27 @@ class CentralStateImpl {
       next.enrichment = existing.enrichment;
     }
 
+    // Verdict ratchet: never downgrade. Hierarchy is deep > watch > skip.
+    // The activity feed showed 43 deep events written then current state had
+    // zero deeps — the judge was running twice with temperature 0.3 producing
+    // a different verdict on the second call (replay or re-fire), and the
+    // patch's new verdict was overwriting the existing higher one. Lock the
+    // monotonic order: once a story is deep it can only stay deep; once
+    // watch it can only become deep, never skip.
+    const verdictOrder = { skip: 0, watch: 1, deep: 2 } as const;
+    if (existing?.verdict && next.verdict) {
+      const prev = verdictOrder[existing.verdict.verdict];
+      const incoming = verdictOrder[next.verdict.verdict];
+      if (incoming < prev) {
+        console.warn("[state.upsert] refusing verdict downgrade", {
+          uuid,
+          existing: existing.verdict.verdict,
+          attempted: next.verdict.verdict,
+        });
+        next.verdict = existing.verdict;
+      }
+    }
+
     await c.hSet(STORIES_KEY, uuid, JSON.stringify(next));
 
     const ev: ActivityEvent = {
