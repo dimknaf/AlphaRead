@@ -1,5 +1,11 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "crons": [
+    {
+      "path": "/api/manual-trigger",
+      "schedule": "*/10 * * * *"
+    }
+  ],
   "functions": {
     "src/app/api/manual-trigger/route.ts": {
       "maxDuration": 800
