@@ -111,12 +111,15 @@ export async function getSectorClassification(
   ticker: string,
 ): Promise<PortfolioClassificationResponse> {
   "use step";
+  // identifier_type MUST be "full_ticker" (singular) for the TICKER-US format
+  // we use elsewhere. "ticker" (plain) accepts only bare exchange-ambiguous
+  // symbols like "BA" — verified empirically returns Bangkok Airways for "BA".
   return cfFetch<PortfolioClassificationResponse>(
     DCSC_BASE,
     "/portfolio_classification",
     {
       identifiers: ticker,
-      identifier_type: "ticker",
+      identifier_type: "full_ticker",
       min_relevance: 30,
       min_confidence: 30,
       show_missing_sectors: false,
