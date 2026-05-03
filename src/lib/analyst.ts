@@ -68,9 +68,19 @@ Be precise about:
 
 Be concise. Avoid corporate-speak. Quote specific numbers when the data supports it; don't make up numbers.`;
 
+/** CityFalcon stories include both company names and exchange-formatted
+ * tickers in `assetTags` — e.g. ["Boeing Co", "BOEI BRU", "BA NYSE", "BA US",
+ * "BCO XETRA", ...]. Picking `assetTags[0]` gives "Boeing Co" which DCSC's
+ * full_ticker endpoint won't match (it expects "BA-US"). Find a US-listed
+ * symbol formatted "<symbol> US" and convert to dash form for DCSC. */
+function pickTickerForDcsc(assetTags: string[]): string | null {
+  const usListing = assetTags.find((t) => /^[A-Z.]+ US$/.test(t));
+  return usListing ? usListing.replace(/\s+/g, "-") : null;
+}
+
 async function gatherEnrichment(story: Story): Promise<EnrichmentBundle> {
   // Parallel fetches; tolerate per-call failure (don't block the analyst).
-  const ticker = story.assetTags[0] ?? "";
+  const ticker = pickTickerForDcsc(story.assetTags);
   const settled = await Promise.allSettled([
     getSimilarStories(story.uuid, 3),
     ticker ? getSectorClassification(ticker) : Promise.resolve({ relevant_sectors: [] }),
