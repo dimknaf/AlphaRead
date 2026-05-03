@@ -1,5 +1,7 @@
 # AlphaRead
 
+[![AlphaRead — demo video](https://img.youtube.com/vi/pOXXeI-CUDU/maxresdefault.jpg)](https://youtu.be/pOXXeI-CUDU)
+
 > **Alpha for long-horizon investors — separates noise from meaningful events, traces sector spillover, reveals what the market misses.**
 
 **Live demo:** [https://alpharead.vercel.app](https://alpharead.vercel.app)
@@ -143,7 +145,7 @@ vercel.json                 # Cron */10 * * * * + maxDuration 800
 - **Anthropic / Claude** — Haiku 4.5 (judge) + Sonnet 4.6 (analyst).
 - **CityFalcon** — financial news API + DCSC sector classification (the user's employer's product).
 - **Bright Data** — Web Unlocker (full-article scraping) + SERP API.
-- **Oscar Falemara** — host of [Zero to Agent: London](https://www.notion.so/oscarama/Zero-to-Agent-London-Information-Public-352f4900574780849517e736e27499b9).
+- **Oscar Falemara** — host of Zero to Agent: London.
 - **Halkin** — venue.
 
 ---
