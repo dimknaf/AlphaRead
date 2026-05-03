@@ -13,6 +13,7 @@ type ActivityEvent = {
   id: string;
   uuid: string;
   ticker?: string;
+  title?: string;
   status: string;
   verdict?: "skip" | "watch" | "deep";
   reason?: string;
@@ -299,7 +300,10 @@ function ActivityFeed({ events }: { events: ActivityEvent[] }) {
   return (
     <ul className="text-xs space-y-1 max-h-[28rem] overflow-y-auto">
       {events.slice(0, 80).map((e) => {
-        const text = e.reason ?? e.uuid.slice(0, 8);
+        // For "new" status events the verdict hasn't been computed yet, so
+        // there's no reason — fall through to the news title (set in
+        // state.upsert). Last-resort fallback is a short uuid slice.
+        const text = e.reason ?? e.title ?? e.uuid.slice(0, 8);
         // Native browser tooltip on hover so the user can read the full
         // judge reason without losing scroll position. Truncation stays for
         // line layout — tooltip is the escape hatch.

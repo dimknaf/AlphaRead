@@ -188,6 +188,10 @@ export type ActivityEvent = {
   id: string;            // unique per event (uuid:status timestamp)
   uuid: string;          // story uuid
   ticker?: string;       // primary ticker if known
+  /** News headline — populated for "new" events that don't have a verdict
+   * reason yet. Lets the dashboard show a meaningful line instead of a
+   * truncated uuid. Verdict reason still wins when present. */
+  title?: string;
   status: Status;
   verdict?: Verdict;
   reason?: string;

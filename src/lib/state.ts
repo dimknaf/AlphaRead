@@ -126,6 +126,7 @@ class CentralStateImpl {
       id: `${next.story.uuid}:${next.status}:${now}`,
       uuid: next.story.uuid,
       ticker: next.story.assetTags[0],
+      title: next.story.title,
       status: next.status,
       verdict: next.verdict?.verdict,
       reason: next.verdict?.reason,

@@ -244,9 +244,24 @@ export async function pollWatchlistOnce(opts: PollOptions = {}): Promise<PollRes
     }
   }
 
+  // Diagnostic: how many stories CityFalcon returned (after in-run dedup).
+  console.log("[workflow] fetch-stats", {
+    candidates: candidates.length,
+    failedTickers: failedTickers.length,
+  });
+
   // Step 3: KV-side dedup (drop stories already known across runs/instances).
   const knownFlags = await bulkHasUuid(candidates.map((s) => s.uuid));
   const fresh: Story[] = candidates.filter((_s, i) => !knownFlags[i]);
+
+  // Diagnostic: how many were filtered out by the KV-side dedup.
+  // If candidates>0 and fresh=0, dedup ate everything (all already judged).
+  // If candidates=0, the fetch returned no stories.
+  console.log("[workflow] dedup-stats", {
+    candidates: candidates.length,
+    knownInKv: knownFlags.filter(Boolean).length,
+    fresh: fresh.length,
+  });
 
   // Step 4: register fresh stories as "new" in KV up front (so dashboard
   // can show them flowing in even before judging completes).
