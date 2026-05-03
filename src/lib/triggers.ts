@@ -1,12 +1,19 @@
 // pollWatchlistOnce — durable workflow that fans out per-ticker fetches,
-// dedupes against KV via HTTP (workflow runtime can't import redis directly),
-// runs the Pre-check Agent on each story, writes verdicts back to KV via
-// HTTP, and returns a verdict-grouped summary.
+// dedupes against KV, runs the Pre-check Agent on each story, writes
+// verdicts back to KV, and returns a verdict-grouped summary.
 //
-// State R/W is done via fetch() to /api/state/upsert and /api/state/has-uuid
-// because the WDK workflow runtime is Edge-like (no Node Buffer global) and
-// can't load the `redis` package. Those API routes run in Node runtime where
-// redis works fine.
+// SPRINT 10 architecture change: state R/W happens via direct dynamic
+// import of `./state` from inside `"use step"` bodies (which run in Node
+// runtime where the redis client works). Earlier we used an HTTP bridge
+// to /api/state/* routes because the WORKFLOW runtime can't load redis,
+// but step bodies can. The HTTP bridge had silent-failure modes (no
+// r.ok check) that we believe were dropping the analyser's
+// post-analysis upserts, leaving Microsoft/Merck-style "ghost analyzed"
+// rows visible to state.get but invisible to listAll.
+//
+// The HTTP routes (/api/state/upsert, /api/state/has-uuid,
+// /api/state/orphans) remain available for any external caller and as
+// a fallback path, but the workflow no longer uses them.
 
 import { analyzeNewsImpact } from "./analyst";
 import { getStoriesForTicker } from "./cityfalcon";
@@ -20,6 +27,7 @@ import type {
   SlimStory,
   Status,
   Story,
+  StoryState,
 } from "./types";
 import { WATCHLIST } from "./watchlist";
 
@@ -39,16 +47,53 @@ function baseUrl(): string {
 // "use step" wrappers: fetch from inside workflow context is forbidden, but
 // step functions run in regular Node runtime where global fetch is available.
 
+/** Fetch deep-verdict stories that don't have analysis yet, via the
+ * HTTP-bridge route (workflow runtime can't import redis directly). */
+async function fetchOrphans(): Promise<Array<{ uuid: string; slim: SlimStory; verdict: JudgeResult }>> {
+  "use step";
+  // Direct state import.
+  const { state } = await import("./state");
+  const xs = await state.listDeepOrphans();
+  return xs.map((s) => ({
+    uuid: s.story.uuid,
+    slim: s.story,
+    verdict: s.verdict!,
+  }));
+}
+
+/** Reconstruct a minimal Story from SlimStory so analyzeAndRecord (which
+ * takes a Story) can run on an orphan. The CityFalcon enrichment in the
+ * analyser only reads assetTags + uuid + title + description anyway. */
+function reconstructStory(slim: SlimStory): Story {
+  return {
+    uuid: slim.uuid,
+    title: slim.title,
+    description: slim.description,
+    url: slim.url,
+    lang: "en",
+    source: { name: slim.source },
+    sentiment: slim.sentiment,
+    cityfalconScore: slim.cityfalconScore,
+    publishTime: slim.publishTime,
+    paywall: false,
+    registrationRequired: false,
+    duplicatesCount: slim.duplicatesCount,
+    assetTags: slim.assetTags,
+  };
+}
+
+async function analyzeOrphan(o: { uuid: string; slim: SlimStory; verdict: JudgeResult }): Promise<void> {
+  "use step";
+  const story = reconstructStory(o.slim);
+  await analyzeAndRecord(story);
+}
+
 async function bulkHasUuid(uuids: string[]): Promise<boolean[]> {
   "use step";
   if (uuids.length === 0) return [];
-  const r = await fetch(`${baseUrl()}/api/state/has-uuid`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ uuids }),
-  });
-  const j = (await r.json()) as { ok: boolean; flags?: boolean[] };
-  return j.flags ?? uuids.map(() => false);
+  // Direct state import — step body runs in Node runtime so redis loads.
+  const { state } = await import("./state");
+  return Promise.all(uuids.map((u) => state.hasUuid(u)));
 }
 
 async function upsertState(
@@ -62,10 +107,16 @@ async function upsertState(
   },
 ): Promise<void> {
   "use step";
-  await fetch(`${baseUrl()}/api/state/upsert`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ uuid, ...patch }),
+  // Direct state import — eliminates the HTTP-bridge silent-failure mode
+  // that we believe was dropping analyser writes (Microsoft/Merck pattern).
+  const { state } = await import("./state");
+  const result = await state.upsert(uuid, patch);
+  console.log("[upsertState] direct", {
+    uuid,
+    patchKeys: Object.keys(patch),
+    finalStatus: result?.status ?? null,
+    finalVerdict: result?.verdict?.verdict ?? null,
+    finalHasAnalysis: Boolean(result?.analysis),
   });
 }
 
@@ -166,6 +217,22 @@ export async function pollWatchlistOnce(opts: PollOptions = {}): Promise<PollRes
   const concurrency = opts.judgeConcurrency ?? 8;
   const timeFilter = opts.timeFilter ?? "d1";
 
+  // Step 0: recover orphaned deep verdicts — stories judged "deep" in a
+  // prior poll that never had their analyser step complete. They'd otherwise
+  // stay orphans forever because dedup excludes them. Capped at 20 per run
+  // so a backlog can't blow the workflow's maxDuration.
+  const tOrphanStart = Date.now();
+  const orphans = await fetchOrphans();
+  const orphanBatch = orphans.slice(0, 20);
+  console.log("[workflow] orphan-recovery", {
+    found: orphans.length,
+    processing: orphanBatch.length,
+  });
+  if (orphanBatch.length > 0) {
+    await chunkedAll(orphanBatch, 3, analyzeOrphan);
+    console.log("[workflow] orphan-recovery done", { ms: Date.now() - tOrphanStart });
+  }
+
   // Step 1: fan-out fetch (allSettled — coverage gaps don't kill the poll).
   const tFetchStart = Date.now();
   const perTicker = await Promise.allSettled(
@@ -190,9 +257,24 @@ export async function pollWatchlistOnce(opts: PollOptions = {}): Promise<PollRes
     }
   }
 
+  // Diagnostic: how many stories CityFalcon returned (after in-run dedup).
+  console.log("[workflow] fetch-stats", {
+    candidates: candidates.length,
+    failedTickers: failedTickers.length,
+  });
+
   // Step 3: KV-side dedup (drop stories already known across runs/instances).
   const knownFlags = await bulkHasUuid(candidates.map((s) => s.uuid));
   const fresh: Story[] = candidates.filter((_s, i) => !knownFlags[i]);
+
+  // Diagnostic: how many were filtered out by the KV-side dedup.
+  // If candidates>0 and fresh=0, dedup ate everything (all already judged).
+  // If candidates=0, the fetch returned no stories.
+  console.log("[workflow] dedup-stats", {
+    candidates: candidates.length,
+    knownInKv: knownFlags.filter(Boolean).length,
+    fresh: fresh.length,
+  });
 
   // Step 4: register fresh stories as "new" in KV up front (so dashboard
   // can show them flowing in even before judging completes).

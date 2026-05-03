@@ -73,7 +73,7 @@ async function gatherEnrichment(story: Story): Promise<EnrichmentBundle> {
   const ticker = story.assetTags[0] ?? "";
   const settled = await Promise.allSettled([
     getSimilarStories(story.uuid, 3),
-    ticker ? getSectorClassification(ticker) : Promise.resolve({ classification: [] }),
+    ticker ? getSectorClassification(ticker) : Promise.resolve({ relevant_sectors: [] }),
   ]);
 
   const similarStories =
@@ -87,12 +87,20 @@ async function gatherEnrichment(story: Story): Promise<EnrichmentBundle> {
         }))
       : [];
 
+  // The DCSC API field is `relevant_sectors` (verified live), NOT
+  // `classification`. The `type` field is a string like "Level 4" — parse to
+  // a number for downstream consumers. Without this fix every analyser run
+  // logged `sectors: 0` because we were reading a non-existent field.
   const sectors =
     settled[1].status === "fulfilled"
-      ? (settled[1].value.classification ?? [])
+      ? (settled[1].value.relevant_sectors ?? [])
           .filter((s) => (s.relevance ?? 0) >= 30)
           .slice(0, 3)
-          .map((s) => ({ name: s.name, slug: s.slug, level: s.level }))
+          .map((s) => ({
+            name: s.name,
+            slug: s.slug,
+            level: parseInt((s.type ?? "Level 0").replace("Level ", ""), 10) || 0,
+          }))
       : [];
 
   // Fetch adjacent companies for the top sector (level 2 typically), if any.

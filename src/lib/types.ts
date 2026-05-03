@@ -38,6 +38,11 @@ export type StoriesResponse = {
 };
 
 // DCSC sector classification — for adjacent-company spillover analysis.
+// Real response shape verified live against
+// https://api.cityfalcon.com/dcsc/v0.1/portfolio_classification:
+//   { companies: [...], summary: [...], relevant_sectors: [{...}] }
+// The actual classification lives in `relevant_sectors`. The string `type`
+// field is "Level 1" / "Level 2" / etc — analyst.ts parses it to a number.
 export type SectorClassification = {
   name: string;
   slug: string;
@@ -48,8 +53,20 @@ export type SectorClassification = {
   confidence?: number;
 };
 
+export type DcscRelevantSector = {
+  relevance: number;
+  percentage_of_total?: number;
+  /** "Level 1" | "Level 2" | "Level 3" | "Level 4" — string in the API. */
+  type: string;
+  name: string;
+  slug: string;
+  companies?: Array<{ slug: string; relevance: number; confidence: number }>;
+};
+
 export type PortfolioClassificationResponse = {
-  classification?: SectorClassification[];
+  companies?: unknown[];
+  summary?: unknown[];
+  relevant_sectors?: DcscRelevantSector[];
 };
 
 export type AdjacentCompany = {
@@ -171,6 +188,10 @@ export type ActivityEvent = {
   id: string;            // unique per event (uuid:status timestamp)
   uuid: string;          // story uuid
   ticker?: string;       // primary ticker if known
+  /** News headline — populated for "new" events that don't have a verdict
+   * reason yet. Lets the dashboard show a meaningful line instead of a
+   * truncated uuid. Verdict reason still wins when present. */
+  title?: string;
   status: Status;
   verdict?: Verdict;
   reason?: string;

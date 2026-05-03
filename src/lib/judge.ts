@@ -43,7 +43,13 @@ Description: ${story.description}`;
     schema: JUDGE_SCHEMA,
     system: SYSTEM,
     prompt: userMsg,
-    temperature: 0.3,
+    // temperature 0: deterministic so the same prompt → same verdict every
+    // time. With 0.3 we saw the judge produce "deep" on first call and then
+    // (on workflow replay or a re-fire across polls) produce "watch" or
+    // "skip" for the same story, which the state.upsert would happily
+    // overwrite. Temperature 0 + the verdict ratchet in state.ts kill that
+    // path. Slight loss of variety in `reason` strings is acceptable.
+    temperature: 0,
     maxRetries: 1,
   });
 

@@ -83,12 +83,50 @@ class CentralStateImpl {
           firstSeen: now,
           lastUpdated: now,
         };
+
+    // Never-wipe guard: a partial patch must NEVER nullify a verdict, analysis
+    // or enrichment that already exists. Spread merging plus an explicit
+    // {verdict: undefined} from a caller (or JSON quirks) was wiping deep
+    // verdicts to null. This forces those three fields to be strictly
+    // additive — once set they survive every subsequent partial upsert.
+    if (existing?.verdict && !next.verdict) {
+      next.verdict = existing.verdict;
+    }
+    if (existing?.analysis && !next.analysis) {
+      next.analysis = existing.analysis;
+    }
+    if (existing?.enrichment && !next.enrichment) {
+      next.enrichment = existing.enrichment;
+    }
+
+    // Verdict ratchet: never downgrade. Hierarchy is deep > watch > skip.
+    // The activity feed showed 43 deep events written then current state had
+    // zero deeps — the judge was running twice with temperature 0.3 producing
+    // a different verdict on the second call (replay or re-fire), and the
+    // patch's new verdict was overwriting the existing higher one. Lock the
+    // monotonic order: once a story is deep it can only stay deep; once
+    // watch it can only become deep, never skip.
+    const verdictOrder = { skip: 0, watch: 1, deep: 2 } as const;
+    if (existing?.verdict && next.verdict) {
+      const prev = verdictOrder[existing.verdict.verdict];
+      const incoming = verdictOrder[next.verdict.verdict];
+      if (incoming < prev) {
+        console.warn("[state.upsert] refusing verdict downgrade", {
+          uuid,
+          existing: existing.verdict.verdict,
+          attempted: next.verdict.verdict,
+        });
+        next.verdict = existing.verdict;
+      }
+    }
+
     await c.hSet(STORIES_KEY, uuid, JSON.stringify(next));
 
     const ev: ActivityEvent = {
       id: `${next.story.uuid}:${next.status}:${now}`,
       uuid: next.story.uuid,
       ticker: next.story.assetTags[0],
+      title: next.story.title,
       status: next.status,
       verdict: next.verdict?.verdict,
       reason: next.verdict?.reason,
@@ -126,6 +164,14 @@ class CentralStateImpl {
     return raw ? (JSON.parse(raw) as StoryState) : null;
   }
 
+  /** Raw hash dump — every uuid → JSON string, no parsing or filtering.
+   * Lets the diff endpoint inspect what's actually stored in Redis without
+   * the listAll filter potentially hiding malformed entries. */
+  async listAllRaw(): Promise<Record<string, string>> {
+    const c = await getClient();
+    return c.hGetAll(STORIES_KEY);
+  }
+
   /**
    * List all story states, defensively skipping entries that are unparseable
    * or missing the `story` field. Earlier workflow crash-and-retry races left
@@ -153,6 +199,15 @@ class CentralStateImpl {
   async listByVerdict(verdict: JudgeResult["verdict"]): Promise<StoryState[]> {
     const xs = await this.listAll();
     return xs.filter((s) => s.verdict?.verdict === verdict);
+  }
+
+  /** Stories that were judged "deep" but never got an analysis persisted.
+   * Used by pollWatchlistOnce as a recovery pass — these would otherwise
+   * stay orphans forever because dedup excludes them on every subsequent
+   * poll (their verdict is set, so hasUuid returns true). */
+  async listDeepOrphans(): Promise<StoryState[]> {
+    const xs = await this.listAll();
+    return xs.filter((s) => s.verdict?.verdict === "deep" && !s.analysis);
   }
 
   // -------- Dashboard section projections --------
